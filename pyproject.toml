@@ -1,0 +1,39 @@
+[project]
+name = "ai-work-agent"
+version = "0.1.0"
+description = "AI 工作助手智能体 - 接入钉钉和飞书，使用 Claude API 作为 AI 核心"
+requires-python = ">=3.9"
+dependencies = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.30.0",
+    "anthropic>=0.40.0",
+    "dingtalk-stream>=0.18.0",
+    "lark-oapi>=1.6.0",
+    "pydantic>=2.0",
+    "pydantic-settings>=2.0",
+    "python-dotenv>=1.0.0",
+    "httpx>=0.27.0",
+    "python-multipart>=0.0.9",
+    "python-pptx>=0.6.21",
+    "python-docx>=1.1.0",
+    "matplotlib>=3.8.0",
+    "numpy>=1.24.0",
+    "PyPDF2>=3.0.0",
+]
+
+[project.optional-dependencies]
+test = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.24.0",
+]
+
+[tool.setuptools.packages.find]
+include = ["app*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"

@@ -1,0 +1,850 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>管理后台 - AI 工作助手</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #0a0e1a; color: #e0e6ed; min-height: 100vh; }
+a { color: #a78bfa; text-decoration: none; }
+
+/* 侧边栏 */
+.layout { display: flex; min-height: 100vh; }
+.sidebar { width: 220px; background: rgba(16, 20, 38, 0.98); border-right: 1px solid rgba(99, 102, 241, 0.15); padding: 20px 0; flex-shrink: 0; display: flex; flex-direction: column; }
+.sidebar .logo { padding: 0 20px 20px; font-size: 16px; font-weight: 700; background: linear-gradient(135deg, #a78bfa, #6366f1); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; }
+.sidebar nav { flex: 1; }
+.sidebar nav a { display: flex; align-items: center; gap: 10px; padding: 10px 20px; font-size: 14px; color: rgba(160, 170, 200, 0.7); transition: all .2s; border-left: 3px solid transparent; }
+.sidebar nav a:hover { background: rgba(99, 102, 241, 0.06); color: #e0e6ed; }
+.sidebar nav a.active { background: rgba(99, 102, 241, 0.1); color: #a78bfa; border-left-color: #6366f1; }
+.sidebar .version { padding: 12px 20px; font-size: 11px; color: rgba(160, 170, 200, 0.4); border-top: 1px solid rgba(99, 102, 241, 0.1); }
+
+.main { flex: 1; overflow-y: auto; padding: 24px; }
+.main .page { display: none; }
+.main .page.active { display: block; }
+
+/* 通用组件 */
+.page-title { font-size: 22px; font-weight: 600; margin-bottom: 20px; background: linear-gradient(135deg, #a78bfa, #6366f1); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; }
+.card { background: rgba(16, 20, 38, 0.8); border: 1px solid rgba(99, 102, 241, 0.1); border-radius: 12px; padding: 20px; margin-bottom: 16px; }
+.card h3 { font-size: 15px; margin-bottom: 14px; color: #a78bfa; }
+.card h4 { font-size: 13px; color: rgba(160, 170, 200, 0.7); margin-bottom: 8px; }
+
+.stats-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; margin-bottom: 20px; }
+.stat-card { background: rgba(16, 20, 38, 0.8); border: 1px solid rgba(99, 102, 241, 0.1); border-radius: 12px; padding: 16px; }
+.stat-card .label { font-size: 12px; color: rgba(160, 170, 200, 0.6); margin-bottom: 6px; }
+.stat-card .value { font-size: 24px; font-weight: 700; background: linear-gradient(135deg, #a78bfa, #6366f1); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; }
+.stat-card .sub { font-size: 11px; color: rgba(160, 170, 200, 0.5); margin-top: 4px; }
+
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th, td { padding: 10px 12px; text-align: left; border-bottom: 1px solid rgba(99, 102, 241, 0.08); }
+th { color: rgba(160, 170, 200, 0.6); font-weight: 500; font-size: 12px; text-transform: uppercase; }
+td { color: #e0e6ed; }
+
+.badge { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 11px; }
+.badge-success { background: rgba(34, 197, 94, 0.15); color: #22c55e; border: 1px solid rgba(34, 197, 94, 0.3); }
+.badge-warning { background: rgba(245, 158, 11, 0.15); color: #f59e0b; border: 1px solid rgba(245, 158, 11, 0.3); }
+.badge-danger { background: rgba(239, 68, 68, 0.15); color: #ef4444; border: 1px solid rgba(239, 68, 68, 0.3); }
+.badge-info { background: rgba(99, 102, 241, 0.15); color: #a78bfa; border: 1px solid rgba(99, 102, 241, 0.3); }
+
+.btn { padding: 6px 14px; border: none; border-radius: 6px; font-size: 13px; cursor: pointer; transition: all .2s; }
+.btn-primary { background: linear-gradient(135deg, #6366f1, #8b5cf6); color: #fff; }
+.btn-primary:hover { opacity: 0.9; }
+.btn-danger { background: rgba(239, 68, 68, 0.15); color: #ef4444; border: 1px solid rgba(239, 68, 68, 0.3); }
+.btn-danger:hover { background: rgba(239, 68, 68, 0.25); }
+.btn-secondary { background: rgba(99, 102, 241, 0.1); color: #a78bfa; border: 1px solid rgba(99, 102, 241, 0.15); }
+.btn-secondary:hover { background: rgba(99, 102, 241, 0.2); }
+.btn-sm { padding: 4px 10px; font-size: 11px; }
+
+.toggle { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; }
+.toggle input { display: none; }
+.toggle .switch { width: 40px; height: 22px; background: rgba(99, 102, 241, 0.15); border-radius: 11px; position: relative; transition: all .2s; border: 1px solid rgba(99, 102, 241, 0.2); }
+.toggle .switch::after { content: ''; width: 16px; height: 16px; background: #a78bfa; border-radius: 50%; position: absolute; top: 2px; left: 2px; transition: all .2s; }
+.toggle input:checked + .switch { background: rgba(99, 102, 241, 0.3); border-color: rgba(99, 102, 241, 0.5); }
+.toggle input:checked + .switch::after { left: 20px; }
+
+textarea, input[type="text"] { background: rgba(30, 35, 55, 0.6); border: 1px solid rgba(99, 102, 241, 0.2); border-radius: 8px; padding: 8px 12px; color: #e0e6ed; font-size: 13px; outline: none; width: 100%; font-family: inherit; }
+textarea:focus, input[type="text"]:focus { border-color: rgba(99, 102, 241, 0.5); }
+textarea { resize: vertical; min-height: 80px; }
+
+.log-line { font-family: "SF Mono", "Consolas", monospace; font-size: 12px; padding: 4px 0; color: rgba(160, 170, 200, 0.8); border-bottom: 1px solid rgba(99, 102, 241, 0.05); }
+.log-line .level-INFO { color: #22c55e; }
+.log-line .level-WARNING { color: #f59e0b; }
+.log-line .level-ERROR { color: #ef4444; }
+.log-line .level-DEBUG { color: rgba(160, 170, 200, 0.5); }
+
+.toast { position: fixed; top: 20px; right: 20px; background: rgba(30, 35, 55, 0.95); backdrop-filter: blur(10px); color: #e0e6ed; padding: 12px 20px; border-radius: 10px; font-size: 13px; z-index: 1000; border: 1px solid rgba(99, 102, 241, 0.3); box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4); animation: slideIn .3s ease; display: none; }
+.toast.error { border-color: rgba(239, 68, 68, 0.5); }
+.toast.show { display: block; }
+@keyframes slideIn { from { transform: translateX(100%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+
+.loading { text-align: center; padding: 40px; color: rgba(160, 170, 200, 0.5); }
+.empty { text-align: center; padding: 30px; color: rgba(160, 170, 200, 0.4); font-size: 13px; }
+
+.form-group { margin-bottom: 14px; }
+.form-group label { display: block; font-size: 12px; color: rgba(160, 170, 200, 0.7); margin-bottom: 6px; }
+
+.flex-row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+</style>
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar">
+    <div class="logo">⚡ AI 工作助手</div>
+    <nav>
+      <a href="#dashboard" class="active" data-page="dashboard">📊 仪表盘</a>
+      <a href="#features" data-page="features">🔧 功能管理</a>
+      <a href="#rag" data-page="rag">📚 知识库</a>
+      <a href="#workflow" data-page="workflow">🔄 工作流</a>
+      <a href="#project" data-page="project">📊 项目管理</a>
+      <a href="#history" data-page="history">🔍 历史搜索</a>
+      <a href="#logs" data-page="logs">📋 系统日志</a>
+    </nav>
+    <div class="version">v0.1.0</div>
+  </aside>
+
+  <main class="main">
+    <!-- 仪表盘 -->
+    <div class="page active" id="page-dashboard">
+      <div class="stats-grid" id="dashboard-stats"></div>
+      <div class="card">
+        <h3>系统信息</h3>
+        <div id="system-info">加载中...</div>
+      </div>
+    </div>
+
+    <!-- 功能管理 -->
+    <div class="page" id="page-features">
+      <div class="page-title">🔧 功能管理</div>
+      <div class="card">
+        <h3>功能开关</h3>
+        <div id="feature-list">加载中...</div>
+      </div>
+    </div>
+
+    <!-- 知识库 -->
+    <div class="page" id="page-rag">
+      <div class="page-title">📚 知识库管理</div>
+      <div class="stats-grid" id="rag-stats"></div>
+      <div class="card">
+        <h3>添加文档</h3>
+        <div class="form-group">
+          <label>标题</label>
+          <input type="text" id="rag-title" placeholder="文档标题">
+        </div>
+        <div class="form-group">
+          <label>内容</label>
+          <textarea id="rag-content" rows="5" placeholder="文档内容..."></textarea>
+        </div>
+        <div class="form-group">
+          <label>来源</label>
+          <input type="text" id="rag-source" placeholder="来源标识（可选）">
+        </div>
+        <button class="btn btn-primary" onclick="addRagDoc()">添加文档</button>
+      </div>
+      <div class="card">
+        <h3>现有文档</h3>
+        <div id="rag-doc-list">加载中...</div>
+      </div>
+    </div>
+
+    <!-- 工作流 -->
+    <div class="page" id="page-workflow">
+      <div class="page-title">🔄 工作流管理</div>
+      <div class="card">
+        <h3>A2A Agent 列表</h3>
+        <div id="agent-list">加载中...</div>
+      </div>
+      <div class="card">
+        <h3>预定义工作流</h3>
+        <div id="workflow-list">加载中...</div>
+      </div>
+    </div>
+
+    <!-- 项目管理 -->
+    <div class="page" id="page-project">
+      <div class="page-title">📊 项目管理</div>
+      <div class="card">
+        <h3>项目分析</h3>
+        <div class="form-group">
+          <label>项目目标</label>
+          <input type="text" id="pj-goal" placeholder="例如：开发用户登录模块">
+        </div>
+        <div class="flex-row">
+          <div class="form-group" style="flex:1;">
+            <label>计划开始日期</label>
+            <input type="date" id="pj-start" value="2026-06-01">
+          </div>
+          <div class="form-group" style="flex:1;">
+            <label>计划结束日期</label>
+            <input type="date" id="pj-end" value="2026-06-30">
+          </div>
+        </div>
+        <div class="form-group">
+          <label>当前进度 (<span id="pj-progress-val">0</span>%)</label>
+          <input type="range" id="pj-progress" min="0" max="100" value="0" oninput="document.getElementById('pj-progress-val').textContent=this.value" style="width:100%;accent-color:#6366f1;">
+        </div>
+        <div class="form-group">
+          <label>依赖项（逗号分隔）</label>
+          <input type="text" id="pj-deps" placeholder="例如：需求文档, UI设计稿">
+        </div>
+        <div class="flex-row">
+          <div class="form-group" style="flex:1;">
+            <label>角色</label>
+            <select id="pj-role" style="background:rgba(30,35,55,0.6);border:1px solid rgba(99,102,241,0.2);border-radius:8px;padding:8px 12px;color:#e0e6ed;font-size:13px;outline:none;width:100%;">
+              <option value="bp">BP（业务伙伴）</option>
+              <option value="owner">Owner（负责人）</option>
+            </select>
+          </div>
+          <div class="form-group" style="flex:1;">
+            <label>用户ID</label>
+            <input type="text" id="pj-userid" placeholder="admin">
+          </div>
+        </div>
+        <button class="btn btn-primary" onclick="runProjectWBS()" style="margin-top:8px;">🚀 开始分析</button>
+        <button class="btn btn-secondary" onclick="loadProjectHistory()" style="margin-top:8px;margin-left:8px;">📋 查看历史</button>
+      </div>
+      <div id="pj-result" style="display:none;">
+        <div class="card" id="pj-alert-card"></div>
+        <div class="card" id="pj-wbs-card"></div>
+        <div class="card" id="pj-suggestions-card"></div>
+      </div>
+      <div class="card" id="pj-history-card">
+        <h3>分析历史</h3>
+        <div id="pj-history-list"><div class="empty">暂无历史记录</div></div>
+      </div>
+    </div>
+
+    <!-- 历史搜索 -->
+    <div class="page" id="page-history">
+      <div class="page-title">🔍 历史搜索</div>
+      <div class="card">
+        <h3>搜索条件</h3>
+        <div class="flex-row" style="margin-bottom:12px;">
+          <div class="form-group" style="flex:1;">
+            <label>分类</label>
+            <select id="h-category" style="background:rgba(30,35,55,0.6);border:1px solid rgba(99,102,241,0.2);border-radius:8px;padding:8px 12px;color:#e0e6ed;font-size:13px;outline:none;width:100%;">
+              <option value="">全部</option>
+              <option value="project">项目管理</option>
+              <option value="chat">对话记录</option>
+              <option value="search">搜索历史</option>
+              <option value="workflow">工作流</option>
+              <option value="rag">知识库</option>
+            </select>
+          </div>
+          <div class="form-group" style="flex:2;">
+            <label>关键词</label>
+            <input type="text" id="h-query" placeholder="输入关键词搜索...">
+          </div>
+        </div>
+        <div class="flex-row" style="margin-bottom:12px;">
+          <div class="form-group" style="flex:1;">
+            <label>开始日期</label>
+            <input type="date" id="h-start-date">
+          </div>
+          <div class="form-group" style="flex:1;">
+            <label>结束日期</label>
+            <input type="date" id="h-end-date">
+          </div>
+        </div>
+        <div class="flex-row">
+          <button class="btn btn-primary" onclick="searchHistory()">🔍 搜索</button>
+          <button class="btn btn-secondary" onclick="clearHistorySearch()">重置</button>
+          <button class="btn btn-danger btn-sm" onclick="clearHistoryCategory()" style="margin-left:auto;">🗑 清空当前分类</button>
+        </div>
+      </div>
+      <div id="history-stats-card" class="card" style="display:none;">
+        <h3>存储统计</h3>
+        <div id="history-stats"></div>
+      </div>
+      <div class="card">
+        <h3>搜索结果 <span id="h-result-count" style="font-weight:400;font-size:12px;color:rgba(160,170,200,0.5);"></span></h3>
+        <div id="history-results"><div class="empty">请输入关键词并点击搜索</div></div>
+      </div>
+    </div>
+
+    <!-- 系统日志 -->
+    <div class="page" id="page-logs">
+      <div class="page-title">📋 系统日志</div>
+      <div class="flex-row" style="margin-bottom: 16px;">
+        <button class="btn btn-secondary btn-sm" onclick="loadLogs('INFO')">INFO</button>
+        <button class="btn btn-secondary btn-sm" onclick="loadLogs('WARNING')">WARNING</button>
+        <button class="btn btn-secondary btn-sm" onclick="loadLogs('ERROR')">ERROR</button>
+        <button class="btn btn-secondary btn-sm" onclick="loadLogs('DEBUG')">DEBUG</button>
+        <button class="btn btn-primary btn-sm" onclick="loadLogs()">全部</button>
+      </div>
+      <div class="card">
+        <div id="log-lines">点击上方按钮加载日志</div>
+      </div>
+    </div>
+  </main>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+// ========== 导航 ==========
+document.querySelectorAll('.sidebar nav a').forEach(link => {
+  link.addEventListener('click', e => {
+    e.preventDefault();
+    const page = link.dataset.page;
+    // 更新导航
+    document.querySelectorAll('.sidebar nav a').forEach(l => l.classList.remove('active'));
+    link.classList.add('active');
+    // 切换页面
+    document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+    document.getElementById('page-' + page).classList.add('active');
+    // 加载数据
+    loadPage(page);
+  });
+});
+
+// ========== Toast ==========
+function showToast(msg, isError = false) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.className = 'toast show' + (isError ? ' error' : '');
+  setTimeout(() => t.classList.remove('show'), 3000);
+}
+
+// ========== API 封装 ==========
+async function apiGet(path) {
+  const resp = await fetch(path);
+  return resp.json();
+}
+
+async function apiPost(path, body) {
+  const resp = await fetch(path, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  return resp.json();
+}
+
+async function apiDelete(path) {
+  const resp = await fetch(path, { method: 'DELETE' });
+  return resp.json();
+}
+
+// ========== 页面加载 ==========
+function loadPage(page) {
+  switch (page) {
+    case 'dashboard': loadDashboard(); break;
+    case 'features': loadFeatures(); break;
+    case 'rag': loadRag(); break;
+    case 'workflow': loadWorkflow(); break;
+    case 'logs': loadLogs(); break;
+    case 'project': loadProjectHistory(); break;
+    case 'history': loadHistoryStats(); break;
+  }
+}
+
+// ========== 仪表盘 ==========
+async function loadDashboard() {
+  try {
+    const health = await apiGet('/health');
+    const ragStats = await apiGet('/rag/stats');
+    const reminderData = await apiGet('/reminders');
+
+    document.getElementById('dashboard-stats').innerHTML = `
+      <div class="stat-card">
+        <div class="label">系统状态</div>
+        <div class="value">${health.status === 'ok' ? '🟢 正常' : '🔴 异常'}</div>
+        <div class="sub">AI 模型: ${health.ai_model || '-'}</div>
+      </div>
+      <div class="stat-card">
+        <div class="label">平台连接</div>
+        <div class="value">${(health.platforms || []).length}</div>
+        <div class="sub">${(health.platforms || []).join(', ') || '无'}</div>
+      </div>
+      <div class="stat-card">
+        <div class="label">知识库文档</div>
+        <div class="value">${ragStats.document_count || 0}</div>
+        <div class="sub">${ragStats.chunk_count || 0} 个分块</div>
+      </div>
+      <div class="stat-card">
+        <div class="label">工作流 Agent</div>
+        <div class="value">${health.workflow_agents || 0}</div>
+        <div class="sub">${health.workflow_workflows || 0} 个工作流</div>
+      </div>
+    `;
+
+    document.getElementById('system-info').innerHTML = `
+      <table>
+        <tr><td>AI 模型</td><td>${health.ai_model || '-'}</td></tr>
+        <tr><td>平台适配器</td><td>${(health.platforms || []).join(', ') || '未启用'}</td></tr>
+        <tr><td>Workflow Agent 数</td><td>${health.workflow_agents || 0}</td></tr>
+        <tr><td>Workflow 工作流数</td><td>${health.workflow_workflows || 0}</td></tr>
+        <tr><td>知识库总字符数</td><td>${ragStats.total_chars || 0}</td></tr>
+        <tr><td>嵌入向量维度</td><td>${ragStats.embedding_dim || 0}</td></tr>
+      </table>
+    `;
+  } catch (e) {
+    document.getElementById('dashboard-stats').innerHTML = '<div class="loading">加载失败: ' + e.message + '</div>';
+  }
+}
+
+// ========== 功能管理 ==========
+async function loadFeatures() {
+  try {
+    const resp = await apiGet('/admin/features');
+    const features = resp.features || [];
+    document.getElementById('feature-list').innerHTML = `
+      <table>
+        <thead><tr><th>功能模块</th><th>描述</th><th>状态</th><th>操作</th></tr></thead>
+        <tbody>
+          ${features.map(f => `
+            <tr>
+              <td>${f.name}</td>
+              <td>${f.description || '-'}</td>
+              <td><span class="badge ${f.enabled ? 'badge-success' : 'badge-danger'}">${f.enabled ? '启用' : '禁用'}</span></td>
+              <td>
+                <label class="toggle">
+                  <input type="checkbox" ${f.enabled ? 'checked' : ''} onchange="toggleFeature('${f.name}', this.checked)">
+                  <span class="switch"></span>
+                </label>
+              </td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
+    `;
+  } catch (e) {
+    document.getElementById('feature-list').innerHTML = '<div class="loading">加载失败: ' + e.message + '</div>';
+  }
+}
+
+async function toggleFeature(name, enabled) {
+  try {
+    await apiPost('/admin/features/toggle', { name, enabled });
+    showToast(`功能 "${name}" 已${enabled ? '启用' : '禁用'}`);
+  } catch (e) {
+    showToast('操作失败: ' + e.message, true);
+    loadFeatures();
+  }
+}
+
+// ========== 知识库 ==========
+async function loadRag() {
+  try {
+    const stats = await apiGet('/rag/stats');
+    document.getElementById('rag-stats').innerHTML = `
+      <div class="stat-card"><div class="label">文档总数</div><div class="value">${stats.document_count}</div></div>
+      <div class="stat-card"><div class="label">分块总数</div><div class="value">${stats.chunk_count}</div></div>
+      <div class="stat-card"><div class="label">总字符数</div><div class="value">${stats.total_chars.toLocaleString()}</div></div>
+      <div class="stat-card"><div class="label">向量维度</div><div class="value">${stats.embedding_dim}</div></div>
+    `;
+
+    const docs = await apiGet('/rag/documents');
+    const docList = docs.documents || [];
+    document.getElementById('rag-doc-list').innerHTML = docList.length === 0
+      ? '<div class="empty">暂无文档</div>'
+      : `<table>
+          <thead><tr><th>ID</th><th>标题</th><th>来源</th><th>预览</th><th>操作</th></tr></thead>
+          <tbody>
+            ${docList.map(d => `
+              <tr>
+                <td style="font-family:monospace;font-size:11px;">${d.id}</td>
+                <td>${d.title || '未命名'}</td>
+                <td>${d.source || '-'}</td>
+                <td style="max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${d.content_preview || '-'}</td>
+                <td><button class="btn btn-danger btn-sm" onclick="deleteRagDoc('${d.id}')">删除</button></td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+        <button class="btn btn-danger btn-sm" style="margin-top:12px;" onclick="clearRag()">清空知识库</button>`;
+  } catch (e) {
+    document.getElementById('rag-doc-list').innerHTML = '<div class="loading">加载失败</div>';
+  }
+}
+
+async function addRagDoc() {
+  const title = document.getElementById('rag-title').value.trim();
+  const content = document.getElementById('rag-content').value.trim();
+  const source = document.getElementById('rag-source').value.trim();
+  if (!content) { showToast('请输入文档内容', true); return; }
+  try {
+    const result = await apiPost('/rag/documents', { title, content, source });
+    if (result.success) {
+      showToast('文档已添加: ' + result.document_id);
+      document.getElementById('rag-title').value = '';
+      document.getElementById('rag-content').value = '';
+      document.getElementById('rag-source').value = '';
+      loadRag();
+    } else {
+      showToast('添加失败: ' + result.error, true);
+    }
+  } catch (e) {
+    showToast('添加失败: ' + e.message, true);
+  }
+}
+
+async function deleteRagDoc(id) {
+  if (!confirm('确定删除文档 ' + id + ' 吗？')) return;
+  try {
+    await apiDelete('/rag/documents/' + id);
+    showToast('文档已删除');
+    loadRag();
+  } catch (e) {
+    showToast('删除失败: ' + e.message, true);
+  }
+}
+
+async function clearRag() {
+  if (!confirm('确定清空所有知识库文档吗？此操作不可恢复！')) return;
+  try {
+    await apiPost('/rag/clear');
+    showToast('知识库已清空');
+    loadRag();
+  } catch (e) {
+    showToast('清空失败: ' + e.message, true);
+  }
+}
+
+// ========== 工作流 ==========
+async function loadWorkflow() {
+  try {
+    const agents = await apiGet('/workflow/agents');
+    const agentData = agents.agents || [];
+    document.getElementById('agent-list').innerHTML = agentData.length === 0
+      ? '<div class="empty">暂无 Agent</div>'
+      : `<table>
+          <thead><tr><th>Agent ID</th><th>名称</th><th>描述</th><th>状态</th><th>能力</th></tr></thead>
+          <tbody>
+            ${agentData.map(a => `
+              <tr>
+                <td style="font-family:monospace;font-size:11px;">${a.id}</td>
+                <td>${a.name}</td>
+                <td>${a.description || '-'}</td>
+                <td><span class="badge ${a.status === 'idle' ? 'badge-success' : 'badge-info'}">${a.status}</span></td>
+                <td>${(a.capabilities || []).map(c => `<span class="badge badge-info" style="margin:1px;">${c.name}</span>`).join(' ') || '-'}</td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>`;
+
+    const workflows = await apiGet('/workflow/workflows');
+    const wfData = workflows.workflows || [];
+    document.getElementById('workflow-list').innerHTML = wfData.length === 0
+      ? '<div class="empty">暂无工作流</div>'
+      : `<table>
+          <thead><tr><th>工作流名称</th><th>描述</th><th>步骤数</th></tr></thead>
+          <tbody>
+            ${wfData.map(w => `
+              <tr>
+                <td style="font-family:monospace;">${w.name}</td>
+                <td>${w.description || '-'}</td>
+                <td>${w.step_count || 0}</td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>`;
+  } catch (e) {
+    document.getElementById('agent-list').innerHTML = '<div class="loading">加载失败</div>';
+  }
+}
+
+// ========== 日志 ==========
+async function loadLogs(level) {
+  try {
+    const params = level ? `?level=${level}&lines=100` : '?lines=100';
+    const resp = await apiGet('/admin/logs' + params);
+    const logs = resp.logs || [];
+    if (logs.length === 0) {
+      document.getElementById('log-lines').innerHTML = '<div class="empty">暂无日志</div>';
+      return;
+    }
+    document.getElementById('log-lines').innerHTML = logs.map(l =>
+      `<div class="log-line"><span class="level-${l.level}">[${l.level}]</span> ${l.timestamp} ${l.message}</div>`
+    ).join('');
+  } catch (e) {
+    document.getElementById('log-lines').innerHTML = '<div class="loading">加载失败: ' + e.message + '</div>';
+  }
+}
+
+// ========== 项目管理 ==========
+async function runProjectWBS() {
+  const goal = document.getElementById('pj-goal').value.trim();
+  const start = document.getElementById('pj-start').value;
+  const end = document.getElementById('pj-end').value;
+  const progress = parseInt(document.getElementById('pj-progress').value);
+  const depsRaw = document.getElementById('pj-deps').value.trim();
+  const role = document.getElementById('pj-role').value;
+  const userId = document.getElementById('pj-userid').value.trim();
+
+  if (!goal || !start || !end) {
+    showToast('请填写项目目标、计划开始和结束日期', true);
+    return;
+  }
+
+  const deps = depsRaw ? depsRaw.split(/[,，]/).map(s => s.trim()).filter(Boolean) : [];
+
+  showToast('正在分析，请稍候...');
+  document.getElementById('pj-result').style.display = 'none';
+
+  try {
+    const resp = await apiPost('/project/wbs', {
+      project_goal: goal,
+      plan_start: start,
+      plan_end: end,
+      current_progress: progress,
+      dependencies: deps,
+      user_role: role,
+      user_id: userId,
+    });
+
+    if (!resp.success) {
+      showToast('分析失败: ' + (resp.error || '未知错误'), true);
+      return;
+    }
+
+    showToast('分析完成！');
+    document.getElementById('pj-result').style.display = 'block';
+
+    // 解析 Markdown 摘要
+    const summary = resp.summary || '';
+
+    // 提取预警等级
+    const alertMatch = summary.match(/预警等级\*\*:\s*(.*?)\*\*/);
+    const alertText = alertMatch ? alertMatch[1] : '';
+    const emoji = alertText.includes('RED') ? '🔴' : alertText.includes('YELLOW') ? '🟡' : '🟢';
+
+    // 提取关键指标
+    const deviationDaysMatch = summary.match(/偏差天数\*\*:\s*([\d.]+)\s*天/);
+    const deviationPctMatch = summary.match(/偏差百分比\*\*:\s*([\d.-]+)%/);
+    const criticalMatch = summary.match(/关键路径阻塞\*\*:\s*(.*)/);
+
+    const alertLevel = alertText.toLowerCase().replace(/\*+/g, '').trim();
+    const alertBg = alertLevel === 'red' ? 'rgba(239,68,68,0.1)' : alertLevel === 'yellow' ? 'rgba(245,158,11,0.1)' : 'rgba(34,197,94,0.1)';
+    const alertBorder = alertLevel === 'red' ? 'rgba(239,68,68,0.3)' : alertLevel === 'yellow' ? 'rgba(245,158,11,0.3)' : 'rgba(34,197,94,0.3)';
+
+    document.getElementById('pj-alert-card').innerHTML = `
+      <h3>${emoji} 排期预警仪表盘</h3>
+      <div class="stats-grid">
+        <div class="stat-card" style="border-color:${alertBorder};background:${alertBg};">
+          <div class="label">预警等级</div>
+          <div class="value">${emoji} ${alertLevel.toUpperCase()}</div>
+        </div>
+        <div class="stat-card">
+          <div class="label">偏差天数</div>
+          <div class="value">${deviationDaysMatch ? deviationDaysMatch[1] : '-'} 天</div>
+        </div>
+        <div class="stat-card">
+          <div class="label">偏差百分比</div>
+          <div class="value">${deviationPctMatch ? deviationPctMatch[1] : '-'}%</div>
+        </div>
+        <div class="stat-card">
+          <div class="label">关键路径阻塞</div>
+          <div class="value">${criticalMatch ? criticalMatch[1] : '-'}</div>
+        </div>
+      </div>`;
+
+    // WBS 树
+    const wbsMatch = summary.match(/### 📋 WBS 结构\n([\s\S]*?)(?=\n###|\n$)/);
+    const wbsContent = wbsMatch ? wbsMatch[1].trim() : '';
+    const wbsLines = wbsContent.split('\n').filter(l => l.trim());
+
+    document.getElementById('pj-wbs-card').innerHTML = `
+      <h3>📋 WBS 结构</h3>
+      <div style="font-family:'SF Mono','Consolas',monospace;font-size:13px;padding:12px;background:rgba(30,35,55,0.4);border-radius:8px;line-height:1.8;">
+        ${wbsLines.length > 0 ? wbsLines.map(l => l.replace(/^\s*-\s*\*\*(.*?)\*\*/, '<span style="color:#a78bfa;">● <b>$1</b></span>')).join('<br>') : '<span style="color:rgba(160,170,200,0.5);">暂无 WBS 数据</span>'}
+      </div>`;
+
+    // 建议动作
+    const suggestionsMatch = summary.match(/### 💡 建议动作\n([\s\S]*?)$/);
+    const suggestionsContent = suggestionsMatch ? suggestionsMatch[1].trim() : '';
+    const suggestionLines = suggestionsContent.split('\n').filter(l => l.trim() && l.startsWith('-'));
+
+    document.getElementById('pj-suggestions-card').innerHTML = `
+      <h3>💡 建议动作</h3>
+      ${suggestionLines.length > 0
+        ? suggestionLines.map(l => `<div style="padding:6px 0;border-bottom:1px solid rgba(99,102,241,0.08);">${l.replace(/^-\s*/, '')}</div>`).join('')
+        : '<div class="empty">暂无建议</div>'}
+    `;
+
+    // 刷新历史
+    loadProjectHistory();
+
+  } catch (e) {
+    showToast('请求失败: ' + e.message, true);
+  }
+}
+
+async function loadProjectHistory() {
+  try {
+    const resp = await apiGet('/project/history');
+    const history = resp.history || [];
+    if (history.length === 0) {
+      document.getElementById('pj-history-list').innerHTML = '<div class="empty">暂无历史记录</div>';
+      return;
+    }
+    const alertEmoji = { green: '🟢', yellow: '🟡', red: '🔴' };
+    document.getElementById('pj-history-list').innerHTML = `
+      <table>
+        <thead><tr><th>时间</th><th>项目目标</th><th>预警等级</th><th>偏差天数</th><th>WBS节点数</th></tr></thead>
+        <tbody>
+          ${history.reverse().map(h => `
+            <tr>
+              <td style="font-size:11px;">${h.timestamp || '-'}</td>
+              <td>${h.project_goal || '-'}</td>
+              <td><span class="badge ${h.alert_level === 'red' ? 'badge-danger' : h.alert_level === 'yellow' ? 'badge-warning' : 'badge-success'}">${(alertEmoji[h.alert_level] || '')} ${h.alert_level}</span></td>
+              <td>${h.deviation_days ?? '-'}</td>
+              <td>${h.wbs_count ?? '-'}</td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>`;
+  } catch (e) {
+    document.getElementById('pj-history-list').innerHTML = '<div class="loading">加载失败: ' + e.message + '</div>';
+  }
+}
+
+// ========== 历史搜索 ==========
+async function searchHistory() {
+  const category = document.getElementById('h-category').value;
+  const query = document.getElementById('h-query').value.trim();
+  const startDate = document.getElementById('h-start-date').value;
+  const endDate = document.getElementById('h-end-date').value;
+
+  const params = new URLSearchParams();
+  if (category) params.set('category', category);
+  if (query) params.set('query', query);
+  if (startDate) params.set('start_date', startDate);
+  if (endDate) params.set('end_date', endDate);
+  params.set('limit', '100');
+
+  try {
+    const resp = await apiGet('/history/search?' + params.toString());
+    const results = resp.results || [];
+    const total = resp.total || results.length;
+
+    document.getElementById('h-result-count').textContent = `（共 ${total} 条）`;
+
+    if (results.length === 0) {
+      document.getElementById('history-results').innerHTML = '<div class="empty">未找到匹配记录</div>';
+      return;
+    }
+
+    // 保存搜索关键词到历史
+    if (query) {
+      await apiPost('/history/search', { category: 'search', query, limit: 1 }).catch(() => {});
+    }
+
+    const categoryLabels = {
+      project: '📊 项目管理',
+      chat: '💬 对话',
+      search: '🔍 搜索',
+      workflow: '🔄 工作流',
+      rag: '📚 知识库',
+    };
+
+    const alertEmoji = { green: '🟢', yellow: '🟡', red: '🔴' };
+
+    document.getElementById('history-results').innerHTML = results.map(r => {
+      const cat = r._category || category || 'unknown';
+      const catLabel = categoryLabels[cat] || cat;
+      const ts = r.timestamp || '';
+      const recordId = r.id || '';
+
+      let rowHtml = '';
+      if (cat === 'project') {
+        rowHtml = `
+          <div style="font-size:13px;color:#e0e6ed;"><b>${(r.project_goal || '').substring(0, 60)}</b></div>
+          <div style="font-size:11px;color:rgba(160,170,200,0.6);">
+            预警: <span class="badge ${r.alert_level === 'red' ? 'badge-danger' : r.alert_level === 'yellow' ? 'badge-warning' : 'badge-success'}">${(alertEmoji[r.alert_level] || '')} ${r.alert_level}</span>
+            &nbsp;|&nbsp; 偏差: ${r.deviation_days ?? '-'}天
+            &nbsp;|&nbsp; WBS: ${r.wbs_count ?? '-'}个节点
+            &nbsp;|&nbsp; 进度: ${r.current_progress ?? '-'}%
+          </div>
+        `;
+      } else {
+        // 通用记录展示
+        const preview = JSON.stringify(r).substring(0, 200);
+        rowHtml = `<div style="font-size:12px;color:rgba(160,170,200,0.7);word-break:break-all;">${preview}</div>`;
+      }
+
+      return `
+        <div style="padding:10px 0;border-bottom:1px solid rgba(99,102,241,0.08);display:flex;align-items:flex-start;gap:12px;">
+          <div style="flex:1;">
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">
+              <span class="badge badge-info">${catLabel}</span>
+              <span style="font-size:11px;color:rgba(160,170,200,0.4);">${ts}</span>
+            </div>
+            ${rowHtml}
+          </div>
+          <button class="btn btn-danger btn-sm" onclick="deleteHistoryRecord('${cat}', '${recordId}')" style="flex-shrink:0;">删除</button>
+        </div>`;
+    }).join('');
+  } catch (e) {
+    document.getElementById('history-results').innerHTML = '<div class="loading">搜索失败: ' + e.message + '</div>';
+  }
+}
+
+async function loadHistoryStats() {
+  try {
+    const resp = await apiGet('/history/stats');
+    const stats = resp.stats || {};
+    document.getElementById('history-stats-card').style.display = 'block';
+    document.getElementById('history-stats').innerHTML = `
+      <div class="stats-grid">
+        <div class="stat-card"><div class="label">项目管理</div><div class="value">${stats.project || 0}</div><div class="sub">条记录</div></div>
+        <div class="stat-card"><div class="label">对话记录</div><div class="value">${stats.chat || 0}</div><div class="sub">条记录</div></div>
+        <div class="stat-card"><div class="label">搜索历史</div><div class="value">${stats.search || 0}</div><div class="sub">条记录</div></div>
+        <div class="stat-card"><div class="label">工作流</div><div class="value">${stats.workflow || 0}</div><div class="sub">条记录</div></div>
+        <div class="stat-card"><div class="label">知识库</div><div class="value">${stats.rag || 0}</div><div class="sub">条记录</div></div>
+        <div class="stat-card"><div class="label">总计</div><div class="value">${stats.total || 0}</div><div class="sub">存储目录: ${stats.storage_dir || '-'}</div></div>
+      </div>
+    `;
+  } catch (e) {
+    document.getElementById('history-stats').innerHTML = '<div class="loading">加载失败</div>';
+  }
+}
+
+function clearHistorySearch() {
+  document.getElementById('h-query').value = '';
+  document.getElementById('h-start-date').value = '';
+  document.getElementById('h-end-date').value = '';
+  document.getElementById('h-category').value = '';
+  document.getElementById('history-results').innerHTML = '<div class="empty">请输入关键词并点击搜索</div>';
+  document.getElementById('h-result-count').textContent = '';
+}
+
+async function clearHistoryCategory() {
+  const category = document.getElementById('h-category').value;
+  const label = category || '全部';
+  if (!confirm(`确定清空「${label}」的所有历史记录吗？此操作不可恢复！`)) return;
+  try {
+    if (category) {
+      await apiDelete('/history/' + category);
+    } else {
+      // 清空所有
+      for (const cat of ['project', 'chat', 'search', 'workflow', 'rag']) {
+        await apiDelete('/history/' + cat).catch(() => {});
+      }
+    }
+    showToast(`「${label}」历史记录已清空`);
+    loadHistoryStats();
+    searchHistory();
+  } catch (e) {
+    showToast('清空失败: ' + e.message, true);
+  }
+}
+
+async function deleteHistoryRecord(category, recordId) {
+  if (!confirm('确定删除此条记录吗？')) return;
+  try {
+    await apiDelete('/history/record/' + category + '/' + recordId);
+    showToast('记录已删除');
+    searchHistory();
+    loadHistoryStats();
+  } catch (e) {
+    showToast('删除失败: ' + e.message, true);
+  }
+}
+
+// ========== 初始加载 ==========
+loadDashboard();
+</script>
+</body>
+</html>
