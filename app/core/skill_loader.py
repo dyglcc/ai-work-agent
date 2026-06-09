@@ -192,8 +192,10 @@ def _load_skill(path: Path) -> SkillDefinition | None:
     name = str(manifest.get("name") or frontmatter.get("name") or skill_id)
     description = str(manifest.get("description") or frontmatter.get("description") or "")
     keywords = _list_value(manifest.get("keywords") or frontmatter.get("keywords"))
+    keywords.extend(_infer_keywords(name, description, instructions))
     if not keywords:
         keywords = [name, skill_id]
+    keywords = list(dict.fromkeys(keyword for keyword in keywords if keyword))
     enabled = bool(manifest.get("enabled", frontmatter.get("enabled", True)))
     entry = str(manifest.get("entry") or frontmatter.get("entry") or "")
     if not entry and (path / "handler.py").is_file():
@@ -262,6 +264,35 @@ def _list_value(value: Any) -> list[str]:
             text = text[1:-1]
         return [part.strip().strip('"').strip("'") for part in re.split(r"[,，]", text) if part.strip()]
     return []
+
+
+def _infer_keywords(name: str, description: str, instructions: str) -> list[str]:
+    text = "\n".join([name or "", description or "", instructions or ""])
+    keywords: list[str] = []
+
+    for pattern in (
+        r"用户说[「\"]([^」\"]+)[」\"]",
+        r"says\s+[\"']([^\"']+)[\"']",
+        r"asks?\s+to\s+([^.,;\n]+)",
+    ):
+        for match in re.finditer(pattern, text, re.I):
+            phrase = match.group(1).strip()
+            phrase = re.sub(r"\s*\+\s*数字.*$", "", phrase)
+            if 1 < len(phrase) <= 32:
+                keywords.append(phrase)
+
+    currency_terms = {
+        "算一下": ["算一下", "换算", "汇率"],
+        "美元": ["美元", "美金", "USD", "$"],
+        "人民币": ["人民币", "RMB", "CNY", "¥"],
+        "Chinese yuan": ["人民币", "RMB", "CNY"],
+        "US dollar": ["美元", "美金", "USD", "$"],
+    }
+    for marker, terms in currency_terms.items():
+        if marker.lower() in text.lower():
+            keywords.extend(terms)
+
+    return keywords
 
 
 def _safe_id(value: str) -> str:

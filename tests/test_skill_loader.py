@@ -136,3 +136,27 @@ def test_installed_skill_feature_matches_name_and_keyword(tmp_path, monkeypatch)
 
     assert feature.matches("请使用触发词")
     assert feature.matches("请使用匹配 Skill")
+
+
+def test_infer_codex_style_skill_triggers_from_description(tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "skills_dir", str(tmp_path))
+    skill_dir = tmp_path / "cny-converter"
+    skill_dir.mkdir()
+    (skill_dir / "SKILL.md").write_text(
+        '''---
+name: cny-converter
+description: Convert a US dollar amount into Chinese yuan (RMB). Make sure to use this skill whenever the user says "算一下" followed by a number, or asks to convert dollars/USD into 人民币/RMB/CNY.
+---
+
+当用户说「算一下 + 数字」，或要求把美元换算成人民币时，触发本 skill。
+''',
+        encoding="utf-8",
+    )
+
+    skill = load_installed_skills()[0]
+    feature = InstalledSkillFeature(DummyAI(), skill)
+
+    assert "算一下" in skill.keywords
+    assert "美元" in skill.keywords
+    assert "人民币" in skill.keywords
+    assert feature.matches("算一下 250")
