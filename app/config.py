@@ -103,6 +103,10 @@ class Settings(BaseSettings):
     )
     log_level: str = Field(default="INFO")
     file_storage_dir: str = Field(default="")
+    skills_dir: str = Field(
+        default="skills",
+        description="本地可安装 Skill 目录，支持相对项目根目录或绝对路径",
+    )
     public_base_url: str = Field(default="")
 
 

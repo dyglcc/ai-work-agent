@@ -1,0 +1,7 @@
+{
+  "id": "project_weekly_report",
+  "name": "项目周报 Skill",
+  "description": "根据项目管理看板生成项目周报、风险和下周计划",
+  "keywords": ["项目周报", "生成项目周报", "项目风险", "下周计划"],
+  "enabled": true
+}

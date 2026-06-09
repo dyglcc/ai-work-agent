@@ -119,6 +119,18 @@ textarea { resize: vertical; min-height: 80px; }
         <h3>功能开关</h3>
         <div id="feature-list">加载中...</div>
       </div>
+      <div class="card">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;">
+          <h3>可安装 Skills</h3>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;">
+            <input type="file" id="skill-zip-file" accept=".zip" style="display:none" onchange="installSkillZip(event)">
+            <button class="btn btn-secondary" onclick="document.getElementById('skill-zip-file').click()">上传 Skill ZIP</button>
+            <button class="btn btn-secondary" onclick="reloadSkills()">重新扫描</button>
+          </div>
+        </div>
+        <div id="skill-dir" style="font-size:12px;color:rgba(160,170,200,0.65);margin:8px 0 12px;"></div>
+        <div id="skill-list">加载中...</div>
+      </div>
     </div>
 
     <!-- 知识库 -->
@@ -370,7 +382,7 @@ async function apiDelete(path) {
 function loadPage(page) {
   switch (page) {
     case 'dashboard': loadDashboard(); break;
-    case 'features': loadFeatures(); break;
+    case 'features': loadFeatures(); loadSkills(); break;
     case 'rag': loadRag(); break;
     case 'workflow': loadWorkflow(); break;
     case 'logs': loadLogs(); break;
@@ -461,6 +473,98 @@ async function toggleFeature(name, enabled) {
   } catch (e) {
     showToast('操作失败: ' + e.message, true);
     loadFeatures();
+  }
+}
+
+async function loadSkills() {
+  try {
+    const resp = await apiGet('/admin/skills');
+    const skills = resp.skills || [];
+    document.getElementById('skill-dir').textContent = '目录：' + (resp.skills_dir || 'skills');
+    if (skills.length === 0) {
+      document.getElementById('skill-list').innerHTML = '<div class="empty">暂无 Skill，把 Codex/Claude Skill 文件夹放到 skills/ 后点击重新扫描。</div>';
+      return;
+    }
+    document.getElementById('skill-list').innerHTML = `
+      <table>
+        <thead><tr><th>Skill</th><th>触发词</th><th>类型</th><th>状态</th><th>操作</th></tr></thead>
+        <tbody>
+          ${skills.map(skill => `
+            <tr>
+              <td>
+                <div style="font-weight:600;color:#e0e6ed;">${escapeHtml(skill.name || skill.id)}</div>
+                <div style="font-size:12px;color:rgba(160,170,200,0.65);">${escapeHtml(skill.description || '-')}</div>
+                <div style="font-size:11px;color:rgba(160,170,200,0.45);">${escapeHtml(skill.id || '')}</div>
+              </td>
+              <td>${(skill.keywords || []).map(k => `<span class="badge badge-info" style="margin:2px;">${escapeHtml(k)}</span>`).join('') || '-'}</td>
+              <td>${skill.has_handler ? '代码型' : '提示型'}</td>
+              <td><span class="badge ${skill.enabled ? 'badge-success' : 'badge-danger'}">${skill.enabled ? '启用' : '禁用'}</span></td>
+              <td>
+                <label class="toggle">
+                  <input type="checkbox" ${skill.enabled ? 'checked' : ''} onchange="toggleSkill('${escapeHtml(skill.id)}', this.checked)">
+                  <span class="switch"></span>
+                </label>
+              </td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
+    `;
+  } catch (e) {
+    document.getElementById('skill-list').innerHTML = '<div class="loading">加载失败: ' + escapeHtml(e.message) + '</div>';
+  }
+}
+
+async function reloadSkills() {
+  try {
+    const resp = await apiPost('/admin/skills/reload', {});
+    if (!resp.success) {
+      showToast('重新扫描失败: ' + (resp.error || '未知错误'), true);
+      return;
+    }
+    showToast(`已加载 ${resp.loaded || 0} 个 Skill`);
+    await loadSkills();
+    await loadWorkflow();
+  } catch (e) {
+    showToast('重新扫描失败: ' + e.message, true);
+  }
+}
+
+async function toggleSkill(skillId, enabled) {
+  try {
+    const resp = await apiPost('/admin/skills/toggle', { skill_id: skillId, enabled });
+    if (!resp.success) {
+      showToast('操作失败: ' + (resp.error || '未知错误'), true);
+      await loadSkills();
+      return;
+    }
+    showToast(`Skill "${skillId}" 已${enabled ? '启用' : '禁用'}`);
+    await loadSkills();
+  } catch (e) {
+    showToast('操作失败: ' + e.message, true);
+    loadSkills();
+  }
+}
+
+async function installSkillZip(event) {
+  const input = event.target;
+  const file = input.files && input.files[0];
+  if (!file) return;
+  const formData = new FormData();
+  formData.append('file', file);
+  try {
+    const resp = await fetch('/admin/skills/install', { method: 'POST', body: formData });
+    const data = await resp.json();
+    if (!data.success) {
+      showToast('安装失败: ' + (data.error || '未知错误'), true);
+      return;
+    }
+    showToast('已安装 Skill: ' + (data.skill && data.skill.name || file.name));
+    await loadSkills();
+  } catch (e) {
+    showToast('安装失败: ' + e.message, true);
+  } finally {
+    input.value = '';
   }
 }
 

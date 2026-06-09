@@ -4,6 +4,7 @@ import logging
 
 from app.core.ai_engine import AIEngine
 from app.core.message import UnifiedMessage
+from app.core.skill_loader import load_skill_features
 from app.features.assistant import AssistantFeature
 from app.features.base import Feature
 from app.features.chart import ChartFeature
@@ -39,7 +40,14 @@ class CommandRouter:
             MeetingFeature(ai_engine),
             CodeFeature(ai_engine),
         ]
+        self.reload_skills()
         self.fallback = AssistantFeature(ai_engine)
+
+    def reload_skills(self) -> list[Feature]:
+        self.features = [feature for feature in self.features if feature.__class__.__name__ != "InstalledSkillFeature"]
+        skill_features = load_skill_features(self.ai_engine)
+        self.features = skill_features + self.features
+        return skill_features
 
     async def route(self, message: UnifiedMessage) -> str:
         """路由消息到匹配的功能模块并返回回复."""

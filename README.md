@@ -113,9 +113,34 @@ AI_WORK_HOST=0.0.0.0
 AI_WORK_PORT=8000
 AI_WORK_RELOAD=true
 AI_WORK_FILE_STORAGE_DIR=
+AI_WORK_SKILLS_DIR=skills
 ```
 
 `AI_WORK_FILE_STORAGE_DIR` 为空时会使用当前系统的临时目录，因此 Windows 和 macOS 都可以正常运行。
+
+## 可安装 Skills
+
+项目支持本地可安装 Skill。把 Codex/Claude 风格的 Skill 文件夹放进 `skills/`，或在管理后台上传 Skill ZIP，然后点击“功能管理 → 可安装 Skills → 重新扫描”。
+
+最小 Skill 结构：
+
+```text
+skills/
+  my_skill/
+    SKILL.md
+```
+
+可选代码型 Skill：
+
+```text
+skills/
+  my_skill/
+    skill.json
+    SKILL.md
+    handler.py
+```
+
+没有 `handler.py` 时，系统会把 `SKILL.md` 当作 system prompt 调用当前 LLM；有 `handler.py` 时，会执行其中的 `handle(message, context)`。
 
 ## Docker
 

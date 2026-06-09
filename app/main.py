@@ -25,6 +25,13 @@ from app.config import settings
 from app.core.ai_engine import AIEngine
 from app.core.message import Platform, ReplyMessage, UnifiedMessage
 from app.core.router import CommandRouter
+from app.core.skill_loader import (
+    execute_skill,
+    install_skill_zip,
+    load_installed_skills,
+    set_skill_enabled,
+    skills_root,
+)
 from app.core.workflow import (
     FeatureAgent,
     WorkflowDefinition,
@@ -448,6 +455,30 @@ def _setup_workflow_engine() -> WorkflowEngine:
             return handler
 
         agent = FeatureAgent(agent_id, name, description, make_handler(feature, agent_id))
+        engine.register_agent(agent)
+
+    for skill in load_installed_skills():
+        if not skill.enabled:
+            continue
+
+        async def skill_handler(task_id: str, instruction: str, skill_id: str = skill.id) -> str:
+            msg = UnifiedMessage(
+                platform=Platform.DINGTALK,
+                message_id=task_id,
+                user_id=skill_id,
+                user_name=skill_id,
+                content=instruction,
+            )
+            return await execute_skill(skill_id, msg, ai_engine)
+
+        agent = FeatureAgent(
+            f"skill:{skill.id}",
+            skill.name,
+            skill.description or "本地安装 Skill",
+            skill_handler,
+        )
+        for keyword in skill.keywords:
+            agent.add_capability(keyword, skill.description or skill.name, [keyword])
         engine.register_agent(agent)
 
     # 预定义工作流 1: 日报生成（总结 → 报告）
@@ -1343,6 +1374,17 @@ class FeatureToggleRequest(BaseModel):
     enabled: bool
 
 
+class SkillExecuteRequest(BaseModel):
+    skill_id: str = Field(..., description="Skill ID")
+    message: str = Field(..., description="输入内容")
+    user_id: str = Field(default="", description="用户 ID")
+
+
+class SkillToggleRequest(BaseModel):
+    skill_id: str
+    enabled: bool
+
+
 @app.post("/admin/features/toggle")
 async def admin_toggle_feature(req: FeatureToggleRequest):
     """切换功能开关"""
@@ -1367,6 +1409,88 @@ async def admin_toggle_feature(req: FeatureToggleRequest):
 
     logger.info("功能 %s 已%s", req.name, "启用" if req.enabled else "禁用")
     return {"success": True, "name": req.name, "enabled": req.enabled}
+
+
+@app.get("/admin/skills")
+async def admin_skills():
+    """列出本地安装的 Skills."""
+    skills = load_installed_skills()
+    return {
+        "success": True,
+        "skills_dir": str(skills_root()),
+        "skills": [skill.to_dict() for skill in skills],
+    }
+
+
+@app.post("/admin/skills/reload")
+async def admin_skills_reload():
+    """重新扫描本地 skills 目录，并刷新聊天路由和工作流 Agent."""
+    skill_features = cmd_router.reload_skills()
+    global workflow_engine
+    workflow_engine = _setup_workflow_engine()
+    return {
+        "success": True,
+        "loaded": len(skill_features),
+        "skills": [feature.skill.to_dict() for feature in skill_features],
+    }
+
+
+@app.post("/admin/skills/toggle")
+async def admin_skills_toggle(req: SkillToggleRequest):
+    """启用或禁用 Skill."""
+    try:
+        skill = set_skill_enabled(req.skill_id, req.enabled)
+        cmd_router.reload_skills()
+        global workflow_engine
+        workflow_engine = _setup_workflow_engine()
+        return {"success": True, "skill": skill.to_dict()}
+    except Exception as exc:
+        logger.exception("切换 Skill 失败")
+        return {"success": False, "error": str(exc)}
+
+
+@app.post("/admin/skills/install")
+async def admin_skills_install(file: UploadFile = File(...)):
+    """上传 zip 安装 Skill."""
+    suffix = pathlib.Path(file.filename or "").suffix.lower()
+    if suffix != ".zip":
+        return {"success": False, "error": "仅支持 .zip 格式的 Skill 包"}
+    content = await file.read()
+    if not content:
+        return {"success": False, "error": "Skill 包为空"}
+
+    temp_path = pathlib.Path(tempfile.gettempdir()) / f"skill-{uuid.uuid4().hex}.zip"
+    try:
+        temp_path.write_bytes(content)
+        skill = install_skill_zip(temp_path)
+        cmd_router.reload_skills()
+        global workflow_engine
+        workflow_engine = _setup_workflow_engine()
+        return {"success": True, "skill": skill.to_dict()}
+    except Exception as exc:
+        logger.exception("安装 Skill 失败")
+        return {"success": False, "error": str(exc)}
+    finally:
+        temp_path.unlink(missing_ok=True)
+
+
+@app.post("/skills/execute")
+async def skills_execute(req: SkillExecuteRequest):
+    """直接执行一个已安装 Skill."""
+    user_id = req.user_id or f"skill_{uuid.uuid4().hex[:8]}"
+    message = UnifiedMessage(
+        platform=Platform.DINGTALK,
+        message_id=uuid.uuid4().hex,
+        user_id=user_id,
+        user_name=user_id,
+        content=req.message,
+    )
+    try:
+        result = await execute_skill(req.skill_id, message, ai_engine)
+        return {"success": True, "skill_id": req.skill_id, "reply": result}
+    except Exception as exc:
+        logger.exception("执行 Skill 失败")
+        return {"success": False, "error": str(exc)}
 
 
 @app.get("/admin/logs")
