@@ -166,6 +166,13 @@ textarea { resize: vertical; min-height: 80px; }
       <div class="card">
         <h3>项目分析</h3>
         <div class="form-group">
+          <label>粘贴项目信息</label>
+          <textarea id="pj-paste" rows="5" placeholder="把项目名称、目标、周期、进度、依赖、负责人等信息直接粘贴到这里，支持多行文本或表格内容。"></textarea>
+        </div>
+        <button class="btn btn-secondary" onclick="classifyProjectPaste()" style="margin-bottom:12px;">一键分类填入</button>
+        <button class="btn btn-secondary" onclick="clearProjectPaste()" style="margin-bottom:12px;margin-left:8px;">清空粘贴</button>
+        <div id="pj-classify-result" style="display:none;margin-bottom:12px;"></div>
+        <div class="form-group">
           <label>项目目标</label>
           <input type="text" id="pj-goal" placeholder="例如：开发用户登录模块">
         </div>
@@ -202,6 +209,23 @@ textarea { resize: vertical; min-height: 80px; }
         </div>
         <button class="btn btn-primary" onclick="runProjectWBS()" style="margin-top:8px;">🚀 开始分析</button>
         <button class="btn btn-secondary" onclick="loadProjectHistory()" style="margin-top:8px;margin-left:8px;">📋 查看历史</button>
+      </div>
+      <div class="card" id="pj-board-card">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;">
+          <h3>底层表格看板</h3>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;">
+            <input type="file" id="pj-import-file" accept=".xlsx,.csv,.tsv" style="display:none" onchange="importProjectTable(event)">
+            <button class="btn btn-secondary" onclick="document.getElementById('pj-import-file').click()">导入表格</button>
+            <button class="btn btn-secondary" onclick="exportProjectTable()">导出表格</button>
+            <button class="btn btn-secondary" onclick="loadProjectBoard()">刷新表格数据</button>
+          </div>
+        </div>
+        <div id="pj-board-source" style="font-size:12px;color:rgba(160,170,200,0.65);margin:8px 0 12px;"></div>
+        <div id="pj-board-summary" class="stats-grid"></div>
+        <div id="pj-board-insights" style="margin-top:12px;"></div>
+        <div id="pj-update-due-list" style="margin-top:12px;"></div>
+        <div id="pj-action-panel" style="margin-top:12px;"></div>
+        <div id="pj-board-list" style="margin-top:12px;"><div class="empty">加载中...</div></div>
       </div>
       <div id="pj-result" style="display:none;">
         <div class="card" id="pj-alert-card"></div>
@@ -248,6 +272,7 @@ textarea { resize: vertical; min-height: 80px; }
         </div>
         <div class="flex-row">
           <button class="btn btn-primary" onclick="searchHistory()">🔍 搜索</button>
+          <button class="btn btn-secondary" onclick="loadAllChats()">💬 查看全部对话</button>
           <button class="btn btn-secondary" onclick="clearHistorySearch()">重置</button>
           <button class="btn btn-danger btn-sm" onclick="clearHistoryCategory()" style="margin-left:auto;">🗑 清空当前分类</button>
         </div>
@@ -283,18 +308,23 @@ textarea { resize: vertical; min-height: 80px; }
 
 <script>
 // ========== 导航 ==========
+function showAdminPage(page) {
+  const link = document.querySelector(`.sidebar nav a[data-page="${page}"]`);
+  const pageEl = document.getElementById('page-' + page);
+  if (!link || !pageEl) return;
+  document.querySelectorAll('.sidebar nav a').forEach(l => l.classList.remove('active'));
+  link.classList.add('active');
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  pageEl.classList.add('active');
+  loadPage(page);
+}
+
 document.querySelectorAll('.sidebar nav a').forEach(link => {
   link.addEventListener('click', e => {
     e.preventDefault();
     const page = link.dataset.page;
-    // 更新导航
-    document.querySelectorAll('.sidebar nav a').forEach(l => l.classList.remove('active'));
-    link.classList.add('active');
-    // 切换页面
-    document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
-    document.getElementById('page-' + page).classList.add('active');
-    // 加载数据
-    loadPage(page);
+    history.replaceState(null, '', '#' + page);
+    showAdminPage(page);
   });
 });
 
@@ -304,6 +334,16 @@ function showToast(msg, isError = false) {
   t.textContent = msg;
   t.className = 'toast show' + (isError ? ' error' : '');
   setTimeout(() => t.classList.remove('show'), 3000);
+}
+
+function escapeHtml(value) {
+  return String(value ?? '').replace(/[&<>"']/g, ch => ({
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    "'": '&#39;',
+  }[ch]));
 }
 
 // ========== API 封装 ==========
@@ -334,7 +374,7 @@ function loadPage(page) {
     case 'rag': loadRag(); break;
     case 'workflow': loadWorkflow(); break;
     case 'logs': loadLogs(); break;
-    case 'project': loadProjectHistory(); break;
+    case 'project': loadProjectBoard(); loadProjectHistory(); break;
     case 'history': loadHistoryStats(); break;
   }
 }
@@ -564,6 +604,707 @@ async function loadLogs(level) {
 }
 
 // ========== 项目管理 ==========
+function normalizeProjectDate(value) {
+  if (!value) return '';
+  const text = String(value).trim();
+  let m = text.match(/(20\d{2})[-/.年](\d{1,2})[-/.月](\d{1,2})/);
+  if (!m) {
+    m = text.match(/(\d{1,2})月(\d{1,2})日?/);
+    if (m) {
+      const year = new Date().getFullYear();
+      return `${year}-${String(m[1]).padStart(2, '0')}-${String(m[2]).padStart(2, '0')}`;
+    }
+    return '';
+  }
+  return `${m[1]}-${String(m[2]).padStart(2, '0')}-${String(m[3]).padStart(2, '0')}`;
+}
+
+function extractProjectDateRange(value) {
+  const text = String(value || '');
+  const matches = [...text.matchAll(/20\d{2}[-/.年]\d{1,2}[-/.月]\d{1,2}/g)].map(m => normalizeProjectDate(m[0]));
+  if (matches.length >= 2) return { start: matches[0], end: matches[1] };
+  const yearMatch = text.match(/(20\d{2})年/);
+  if (yearMatch) {
+    const monthDays = [...text.matchAll(/(\d{1,2})月(\d{1,2})日?/g)];
+    if (monthDays.length >= 2) {
+      const y = yearMatch[1];
+      return {
+        start: `${y}-${String(monthDays[0][1]).padStart(2, '0')}-${String(monthDays[0][2]).padStart(2, '0')}`,
+        end: `${y}-${String(monthDays[1][1]).padStart(2, '0')}-${String(monthDays[1][2]).padStart(2, '0')}`,
+      };
+    }
+  }
+  return { start: '', end: '' };
+}
+
+function extractProjectProgress(value) {
+  const text = String(value || '');
+  const percent = text.match(/(\d+(?:\.\d+)?)\s*%/);
+  if (percent) return Math.max(0, Math.min(100, parseInt(percent[1], 10)));
+  if (/已完成|完成|结项|上线|交付/.test(text)) return 100;
+  if (/未开始|待启动|未启动/.test(text)) return 0;
+  return 0;
+}
+
+function splitProjectItems(value) {
+  return String(value || '')
+    .split(/[,，、;；\n]/)
+    .map(s => s.trim())
+    .filter(Boolean);
+}
+
+function cleanProjectValue(value) {
+  return String(value || '')
+    .replace(/^[-*•\d.\s]+/, '')
+    .replace(/^[：:，,\s]+/, '')
+    .trim();
+}
+
+function setProjectField(id, value) {
+  if (value === undefined || value === null || value === '') return;
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.value = value;
+  if (id === 'pj-progress') {
+    document.getElementById('pj-progress-val').textContent = value;
+  }
+}
+
+function pickProjectTableData(lines) {
+  const tableLines = lines.filter(line => line.includes('\t') || line.includes('|'));
+  if (tableLines.length < 2) return {};
+  const splitRow = line => line.split(line.includes('\t') ? '\t' : '|').map(x => x.trim()).filter(Boolean);
+  const headers = splitRow(tableLines[0]);
+  const values = splitRow(tableLines[1]);
+  if (headers.length < 2 || values.length < 2) return {};
+
+  const out = {};
+  headers.forEach((header, idx) => {
+    const h = header.toLowerCase().replace(/\s+/g, '');
+    const value = values[idx] || '';
+    if (!value) return;
+    if (/项目名称|项目目标|项目|任务|需求|goal|name/.test(h)) out.project_goal = value;
+    else if (/开始|启动|start/.test(h)) out.plan_start = normalizeProjectDate(value);
+    else if (/结束|截止|完成时间|end|deadline|due/.test(h)) out.plan_end = normalizeProjectDate(value);
+    else if (/进度|完成率|progress/.test(h)) out.current_progress = value;
+    else if (/依赖|前置|阻塞|dependencies|blocker/.test(h)) out.dependencies = splitProjectItems(value);
+    else if (/角色|role/.test(h)) out.user_role = /owner|负责人/i.test(value) ? 'owner' : 'bp';
+    else if (/负责人|用户|owner|user/.test(h)) out.user_id = value;
+  });
+  return out;
+}
+
+function classifyProjectText(text) {
+  const lines = text.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
+  const data = pickProjectTableData(lines);
+  const uncategorized = [];
+
+  const assignTextField = (field, value) => {
+    const clean = cleanProjectValue(value);
+    if (clean && !data[field]) data[field] = clean;
+  };
+
+  lines.forEach(line => {
+    const lower = line.toLowerCase();
+    const parts = line.split(/[:：]/);
+    const key = parts.length > 1 ? parts[0].trim().toLowerCase().replace(/\s+/g, '') : '';
+    const value = parts.length > 1 ? parts.slice(1).join(':').trim() : line;
+    let matched = false;
+
+    if (/项目目标|项目名称|项目|任务|需求|目标|projectgoal|goal|name/.test(key)) {
+      assignTextField('project_goal', value);
+      matched = true;
+    } else if (/计划开始|开始日期|开始时间|启动时间|start|planstart/.test(key)) {
+      assignTextField('plan_start', normalizeProjectDate(value));
+      matched = true;
+    } else if (/计划结束|结束日期|结束时间|截止|deadline|due|end|planend/.test(key)) {
+      assignTextField('plan_end', normalizeProjectDate(value));
+      matched = true;
+    } else if (/当前进度|完成率|进度|progress|currentprogress/.test(key)) {
+      const m = value.match(/\d+(?:\.\d+)?/);
+      if (m && !data.current_progress) data.current_progress = m[0];
+      matched = true;
+    } else if (/依赖|前置|阻塞|风险|dependencies|blocker/.test(key)) {
+      if (!data.dependencies) data.dependencies = splitProjectItems(value);
+      matched = true;
+    } else if (/角色|role/.test(key)) {
+      if (!data.user_role) data.user_role = /owner|负责人/i.test(value) ? 'owner' : 'bp';
+      matched = true;
+    } else if (/负责人|用户id|用户|owner|userid|user/.test(key)) {
+      assignTextField('user_id', value);
+      matched = true;
+    }
+
+    if (!matched) {
+      const progress = line.match(/(?:进度|完成率|progress)[^\d]*(\d+(?:\.\d+)?)\s*%?/i) || line.match(/(\d+(?:\.\d+)?)\s*%/);
+      const dates = [...line.matchAll(/20\d{2}[-/.年]\d{1,2}[-/.月]\d{1,2}/g)].map(m => normalizeProjectDate(m[0]));
+      if (progress && !data.current_progress) {
+        data.current_progress = progress[1];
+        matched = true;
+      }
+      if (dates.length >= 2) {
+        if (!data.plan_start) data.plan_start = dates[0];
+        if (!data.plan_end) data.plan_end = dates[1];
+        matched = true;
+      } else if (dates.length === 1 && /开始|启动/.test(line) && !data.plan_start) {
+        data.plan_start = dates[0];
+        matched = true;
+      } else if (dates.length === 1 && /结束|截止|完成/.test(line) && !data.plan_end) {
+        data.plan_end = dates[0];
+        matched = true;
+      }
+      if (/依赖|前置|阻塞|风险/.test(line) && !data.dependencies) {
+        data.dependencies = splitProjectItems(line.replace(/依赖|前置|阻塞|风险|[:：]/g, ''));
+        matched = true;
+      }
+      if (!matched && !data.project_goal && line.length >= 4 && !/^\d+$/.test(line)) {
+        data.project_goal = cleanProjectValue(line.replace(/^(项目|任务|需求|目标)\s*[:：]?/, ''));
+        matched = true;
+      }
+    }
+
+    if (!matched) uncategorized.push(line);
+  });
+
+  return { data, uncategorized };
+}
+
+function renderProjectClassifyResult(result) {
+  const data = result.data;
+  const deps = data.dependencies || [];
+  const rows = [
+    ['项目目标', data.project_goal],
+    ['计划开始', data.plan_start],
+    ['计划结束', data.plan_end],
+    ['当前进度', data.current_progress ? `${data.current_progress}%` : ''],
+    ['依赖项', deps.join('，')],
+    ['角色', data.user_role],
+    ['用户/负责人', data.user_id],
+  ].filter(([, value]) => value);
+
+  const box = document.getElementById('pj-classify-result');
+  if (rows.length === 0) {
+    box.style.display = 'block';
+    box.innerHTML = '<div class="empty">没有识别到可填入的项目信息，请检查粘贴内容。</div>';
+    return;
+  }
+
+  box.style.display = 'block';
+  box.innerHTML = `
+    <div style="padding:10px 12px;background:rgba(99,102,241,0.08);border:1px solid rgba(99,102,241,0.18);border-radius:8px;">
+      <div style="font-size:13px;color:#a78bfa;margin-bottom:8px;">已分类识别</div>
+      ${rows.map(([label, value]) => `<span class="badge badge-info" style="margin:2px 4px 2px 0;">${label}: ${escapeHtml(String(value))}</span>`).join('')}
+      ${result.uncategorized.length ? `<div style="font-size:12px;color:rgba(160,170,200,0.65);margin-top:8px;">未分类 ${result.uncategorized.length} 行，已保留在粘贴框中供你检查。</div>` : ''}
+    </div>`;
+}
+
+function classifyProjectPaste() {
+  const text = document.getElementById('pj-paste').value.trim();
+  if (!text) {
+    showToast('请先粘贴项目信息', true);
+    return;
+  }
+
+  const result = classifyProjectText(text);
+  const data = result.data;
+  setProjectField('pj-goal', data.project_goal);
+  setProjectField('pj-start', data.plan_start);
+  setProjectField('pj-end', data.plan_end);
+  if (data.current_progress !== undefined) {
+    const progress = Math.max(0, Math.min(100, parseInt(data.current_progress, 10) || 0));
+    setProjectField('pj-progress', progress);
+  }
+  if (data.dependencies && data.dependencies.length > 0) setProjectField('pj-deps', data.dependencies.join(', '));
+  if (data.user_role) setProjectField('pj-role', data.user_role);
+  setProjectField('pj-userid', data.user_id);
+  renderProjectClassifyResult(result);
+  showToast('已按内容分类填入');
+}
+
+function clearProjectPaste() {
+  document.getElementById('pj-paste').value = '';
+  document.getElementById('pj-classify-result').style.display = 'none';
+}
+
+function fillProjectFromBoard(index) {
+  const project = (window.projectBoardData && window.projectBoardData.projects || [])[index];
+  if (!project) return;
+  const dateRange = extractProjectDateRange(project.period);
+  setProjectField('pj-goal', project.goal || project.name);
+  setProjectField('pj-start', dateRange.start);
+  setProjectField('pj-end', dateRange.end);
+  setProjectField('pj-progress', extractProjectProgress(project.progress));
+  const deps = [project.risks, project.latest_update].filter(Boolean).join(', ');
+  setProjectField('pj-deps', deps);
+  setProjectField('pj-role', 'bp');
+  setProjectField('pj-userid', project.owner && project.owner !== '未标注' ? project.owner : 'admin');
+  document.getElementById('pj-paste').value = [
+    `项目名称：${project.name || ''}`,
+    `项目目标：${project.goal || ''}`,
+    `计划周期：${project.period || ''}`,
+    `当前进度：${project.progress || ''}`,
+    `负责人：${project.owner || ''}`,
+    `部门：${project.department || ''}`,
+    `风险/问题：${project.risks || ''}`,
+  ].filter(line => !line.endsWith('：')).join('\n');
+  showToast('已从底层表格填入');
+}
+
+async function importProjectTable(event) {
+  const input = event.target;
+  const file = input.files && input.files[0];
+  if (!file) return;
+  const formData = new FormData();
+  formData.append('file', file);
+  showToast('正在导入表格...');
+  try {
+    const resp = await fetch('/project/import', {
+      method: 'POST',
+      body: formData,
+    });
+    const data = await resp.json();
+    if (!data.success) {
+      showToast('导入失败: ' + (data.error || '未知错误'), true);
+      return;
+    }
+    showToast('已导入: ' + data.filename);
+    await loadProjectBoard();
+  } catch (e) {
+    showToast('导入失败: ' + e.message, true);
+  } finally {
+    input.value = '';
+  }
+}
+
+function exportProjectTable() {
+  window.location.href = '/project/export';
+}
+
+function projectRiskBadge(level) {
+  if (level === 'red') return '<span class="badge badge-danger">高风险</span>';
+  if (level === 'yellow') return '<span class="badge badge-warning">需关注</span>';
+  return '<span class="badge badge-success">正常</span>';
+}
+
+function projectProblemBadge(status) {
+  const level = status && status.level;
+  if (level === 'red') return '<span class="badge badge-danger">有问题</span>';
+  if (level === 'yellow') return '<span class="badge badge-warning">需关注</span>';
+  return '<span class="badge badge-success">正常</span>';
+}
+
+function renderProjectProblemStatus(status) {
+  if (!status || !status.issues || status.issues.length === 0) {
+    return '<div class="empty" style="padding:8px 0;">暂无明显问题</div>';
+  }
+  const issueHtml = status.issues.map(issue => `
+    <div style="padding:6px 0;border-bottom:1px solid rgba(99,102,241,0.08);">
+      <span class="badge ${issue.severity === 'red' ? 'badge-danger' : 'badge-warning'}">${escapeHtml(issue.label || '问题')}</span>
+      <span style="font-size:12px;color:rgba(224,230,237,0.78);margin-left:6px;">${escapeHtml(issue.detail || '')}</span>
+    </div>
+  `).join('');
+  const suggestionHtml = (status.suggestions || []).length
+    ? `<div style="margin-top:8px;font-size:12px;color:rgba(160,170,200,0.78);">
+        ${(status.suggestions || []).map(item => `<div>建议：${escapeHtml(item)}</div>`).join('')}
+      </div>`
+    : '';
+  return issueHtml + suggestionHtml;
+}
+
+function renderProjectUpdates(updates) {
+  if (!updates || updates.length === 0) {
+    return '<div class="empty" style="padding:8px 0;">暂无人工进展记录</div>';
+  }
+  return updates.map(item => `
+    <div style="padding:8px 0;border-bottom:1px solid rgba(99,102,241,0.08);">
+      <div style="font-size:12px;color:rgba(160,170,200,0.65);">${escapeHtml(item.timestamp || '')} · ${escapeHtml(item.author || 'admin')}</div>
+      <div style="font-size:13px;color:#e0e6ed;white-space:pre-wrap;">${escapeHtml(item.content || '')}</div>
+    </div>
+  `).join('');
+}
+
+function projectUpdateBadge(status) {
+  if (!status || !status.due) return '<span class="badge badge-success">更新正常</span>';
+  if (status.type === 'new_project_weekly') return '<span class="badge badge-warning">新项目本周需更新</span>';
+  if (status.type === 'biweekly_overdue') return '<span class="badge badge-danger">双周更新逾期</span>';
+  return '<span class="badge badge-warning">需补双周进展</span>';
+}
+
+function renderProjectUpdateDueList(projects) {
+  const due = (projects || []).filter(project => project.update_status && project.update_status.due);
+  if (due.length === 0) {
+    return `
+      <div style="padding:10px 12px;background:rgba(34,197,94,0.08);border:1px solid rgba(34,197,94,0.18);border-radius:8px;color:#bbf7d0;">
+        当前没有待更新项目
+      </div>
+    `;
+  }
+  return `
+    <div style="padding:12px;background:rgba(245,158,11,0.08);border:1px solid rgba(245,158,11,0.2);border-radius:8px;">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:8px;">
+        <div style="font-weight:600;color:#fbbf24;">待更新项目 ${due.length} 个</div>
+        <div style="font-size:12px;color:rgba(224,230,237,0.72);">已有项目双周更新，新项目当周更新</div>
+      </div>
+      ${due.map(project => `
+        <div style="padding:8px 0;border-top:1px solid rgba(245,158,11,0.14);">
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+            <b>${escapeHtml(project.name || '-')}</b>
+            ${projectUpdateBadge(project.update_status)}
+            <span style="font-size:12px;color:rgba(160,170,200,0.65);">负责人：${escapeHtml(project.owner || '-')}</span>
+          </div>
+          <div style="font-size:12px;color:rgba(224,230,237,0.72);margin-top:4px;">${escapeHtml(project.update_status.reason || '')}</div>
+          <div style="font-size:12px;color:rgba(160,170,200,0.72);margin-top:4px;">${escapeHtml(project.update_status.reminder || '')}</div>
+        </div>
+      `).join('')}
+    </div>
+  `;
+}
+
+function projectIssueLabels(project) {
+  return ((project.problem_status && project.problem_status.issues) || [])
+    .map(issue => issue.label)
+    .filter(Boolean)
+    .join('、') || '暂无明显问题';
+}
+
+function projectSuggestions(project) {
+  return ((project.problem_status && project.problem_status.suggestions) || [])
+    .filter(Boolean)
+    .join('；') || '保持双周更新，持续追踪交付结果。';
+}
+
+function projectLatestProgress(project) {
+  const updates = project.updates || [];
+  if (updates.length > 0 && updates[0].content) return updates[0].content;
+  return project.latest_update || project.progress || '暂无进展记录';
+}
+
+function getProjectBoardProjects() {
+  const projects = (window.projectBoardData && window.projectBoardData.projects) || [];
+  if (projects.length === 0) {
+    showToast('请先刷新表格数据', true);
+  }
+  return projects;
+}
+
+function renderProjectActionPanel() {
+  return `
+    <div style="padding:12px;background:rgba(30,35,55,0.34);border:1px solid rgba(99,102,241,0.14);border-radius:8px;">
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px;">
+        <div>
+          <div style="font-size:13px;color:#a78bfa;margin-bottom:8px;">汇报生成</div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;">
+            <button class="btn btn-secondary" onclick="generateProjectAction('weekly')">生成项目周报</button>
+            <button class="btn btn-secondary" onclick="generateProjectAction('risks')">一键生成风险清单</button>
+            <button class="btn btn-secondary" onclick="generateProjectAction('boss')">一键生成老板汇报</button>
+            <button class="btn btn-secondary" onclick="generateProjectAction('nextWeek')">一键生成下周计划</button>
+          </div>
+        </div>
+        <div>
+          <div style="font-size:13px;color:#a78bfa;margin-bottom:8px;">推进动作</div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;">
+            <button class="btn btn-secondary" onclick="generateProjectAction('reminders')">一键催办负责人</button>
+            <button class="btn btn-secondary" onclick="generateProjectAction('feishuSync')">从飞书同步进展</button>
+          </div>
+        </div>
+      </div>
+      <div id="pj-action-output" style="display:none;margin-top:12px;"></div>
+    </div>
+  `;
+}
+
+async function copyProjectActionResult() {
+  const output = document.getElementById('pj-action-text');
+  if (!output) return;
+  try {
+    await navigator.clipboard.writeText(output.value);
+    showToast('已复制结果');
+  } catch (e) {
+    output.select();
+    showToast('已选中内容，可手动复制');
+  }
+}
+
+function showProjectActionResult(title, content) {
+  const box = document.getElementById('pj-action-output');
+  if (!box) return;
+  box.style.display = 'block';
+  box.innerHTML = `
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:8px;">
+      <div style="font-size:13px;color:#e0e6ed;font-weight:600;">${escapeHtml(title)}</div>
+      <button class="btn btn-secondary" onclick="copyProjectActionResult()">复制结果</button>
+    </div>
+    <textarea id="pj-action-text" rows="14" style="width:100%;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;line-height:1.6;">${escapeHtml(content)}</textarea>
+  `;
+}
+
+function buildProjectWeeklyReport(projects) {
+  const summary = (window.projectBoardData && window.projectBoardData.summary) || {};
+  const problemProjects = projects.filter(p => p.problem_status && p.problem_status.level !== 'green');
+  const dueProjects = projects.filter(p => p.update_status && p.update_status.due);
+  return [
+    '项目周报',
+    '',
+    `一、本周概览：共 ${summary.total || projects.length} 个项目，进行中 ${summary.active || 0} 个，待更新 ${summary.update_due || dueProjects.length} 个，问题项目 ${summary.problem || problemProjects.length} 个，高风险 ${summary.high_problem || 0} 个。`,
+    '',
+    '二、本周进展：',
+    ...projects.map(p => `- ${p.name}：${projectLatestProgress(p)}`),
+    '',
+    '三、风险与阻塞：',
+    ...(problemProjects.length ? problemProjects.map(p => `- ${p.name}（${p.owner || '未标注'}）：${projectIssueLabels(p)}`) : ['- 暂无明显风险。']),
+    '',
+    '四、待协调事项：',
+    ...(problemProjects.length ? problemProjects.map(p => `- ${p.name}：${projectSuggestions(p)}`) : ['- 暂无待协调事项。']),
+  ].join('\n');
+}
+
+function buildProjectRiskList(projects) {
+  const problemProjects = projects
+    .filter(p => p.problem_status && p.problem_status.level !== 'green')
+    .sort((a, b) => (a.problem_status.level === 'red' ? -1 : 1) - (b.problem_status.level === 'red' ? -1 : 1));
+  return [
+    '项目风险清单',
+    '',
+    ...(problemProjects.length ? problemProjects.map((p, idx) => [
+      `${idx + 1}. ${p.name}`,
+      `   负责人：${p.owner || '未标注'}`,
+      `   风险等级：${p.problem_status.label || projectRiskBadge(p.risk_level).replace(/<[^>]+>/g, '')}`,
+      `   问题原因：${projectIssueLabels(p)}`,
+      `   推进建议：${projectSuggestions(p)}`,
+    ].join('\n')) : ['暂无明显风险项目。']),
+  ].join('\n');
+}
+
+function buildBossReport(projects) {
+  const summary = (window.projectBoardData && window.projectBoardData.summary) || {};
+  const high = projects.filter(p => p.problem_status && p.problem_status.level === 'red');
+  const focus = projects.filter(p => p.problem_status && p.problem_status.level === 'yellow');
+  const valuable = projects.filter(p => p.value || p.level === '公司级项目').slice(0, 5);
+  return [
+    '老板汇报',
+    '',
+    `结论：当前共 ${summary.total || projects.length} 个项目，${summary.problem || high.length + focus.length} 个需要关注，其中 ${summary.high_problem || high.length} 个高风险。建议优先处理负责人不明确、进展缺失和缺少下一步动作的问题。`,
+    '',
+    '重点项目：',
+    ...(valuable.length ? valuable.map(p => `- ${p.name}：${p.value || p.goal || '需补充项目价值'}；当前状态 ${p.status || '-'}。`) : ['- 暂无可识别重点项目。']),
+    '',
+    '主要风险：',
+    ...(high.concat(focus).slice(0, 8).map(p => `- ${p.name}：${projectIssueLabels(p)}`)),
+    '',
+    '需要决策/协调：',
+    ...(high.length ? high.map(p => `- ${p.name}：${projectSuggestions(p)}`) : ['- 暂无必须升级到老板层面的事项。']),
+  ].join('\n');
+}
+
+function buildNextWeekPlan(projects) {
+  return [
+    '下周计划',
+    '',
+    ...projects.map((p, idx) => [
+      `${idx + 1}. ${p.name}`,
+      `   负责人：${p.owner || '未标注'}`,
+      `   下周动作：${projectSuggestions(p)}`,
+      `   验收口径：补齐进展、风险、下一步动作；如有阻塞，明确协调对象和时间。`,
+    ].join('\n')),
+  ].join('\n');
+}
+
+function buildOwnerReminders(projects) {
+  const due = projects.filter(p => p.update_status && p.update_status.due);
+  const reminders = due.length ? due.map(p => [
+      `@${p.owner && p.owner !== '未标注' ? p.owner : '项目负责人'}`,
+      `请今天补充《${p.name}》项目进展：`,
+      `1. 本期完成了什么`,
+      `2. 当前风险/阻塞是什么`,
+      `3. 下阶段动作、负责人和预计完成时间`,
+      `原因：${p.update_status.reason || '需要补充双周更新'}`,
+    ].join('\n')) : ['当前没有待催办项目。'];
+  return ['负责人催办话术', '', reminders.join('\n\n')].join('\n');
+}
+
+async function buildFeishuProgressCandidates(projects) {
+  const params = new URLSearchParams({ category: 'chat', limit: '80' });
+  const resp = await apiGet('/history/search?' + params.toString());
+  const chats = resp.results || [];
+  const candidates = [];
+  projects.forEach(project => {
+    const name = project.name || '';
+    if (!name || name.length < 3) return;
+    chats.forEach(chat => {
+      const text = `${chat.user_message || ''}\n${chat.assistant_reply || ''}`;
+      if (text.includes(name) || (project.owner && project.owner !== '未标注' && text.includes(project.owner))) {
+        candidates.push({
+          project,
+          timestamp: chat.timestamp || '',
+          user: chat.user_name || chat.user_id || '',
+          text: (chat.user_message || '').slice(0, 220),
+        });
+      }
+    });
+  });
+  if (candidates.length === 0) {
+    return '飞书项目进展候选\n\n暂无匹配候选。后续可以按“项目名/负责人/关键词”继续增强匹配规则。';
+  }
+  return [
+    '飞书项目进展候选',
+    '',
+    '说明：以下只是候选内容，建议确认后再写入项目进展。',
+    '',
+    ...candidates.slice(0, 20).map((item, idx) => [
+      `${idx + 1}. ${item.project.name}`,
+      `   时间：${item.timestamp || '-'}`,
+      `   用户：${item.user || '-'}`,
+      `   候选消息：${item.text || '-'}`,
+    ].join('\n')),
+  ].join('\n');
+}
+
+async function generateProjectAction(type) {
+  const projects = getProjectBoardProjects();
+  if (projects.length === 0) return;
+  if (type === 'weekly') return showProjectActionResult('项目周报', buildProjectWeeklyReport(projects));
+  if (type === 'risks') return showProjectActionResult('风险清单', buildProjectRiskList(projects));
+  if (type === 'boss') return showProjectActionResult('老板汇报', buildBossReport(projects));
+  if (type === 'nextWeek') return showProjectActionResult('下周计划', buildNextWeekPlan(projects));
+  if (type === 'reminders') return showProjectActionResult('催办负责人', buildOwnerReminders(projects));
+  if (type === 'feishuSync') {
+    showProjectActionResult('飞书项目进展候选', '正在从聊天记录里匹配项目进展...');
+    const content = await buildFeishuProgressCandidates(projects);
+    return showProjectActionResult('飞书项目进展候选', content);
+  }
+}
+
+function toggleProjectDetail(index) {
+  const row = document.getElementById('pj-detail-' + index);
+  if (!row) return;
+  row.style.display = row.style.display === 'none' ? 'table-row' : 'none';
+}
+
+async function saveProjectUpdate(index) {
+  const project = (window.projectBoardData && window.projectBoardData.projects || [])[index];
+  if (!project) return;
+  const input = document.getElementById('pj-update-' + index);
+  const content = input ? input.value.trim() : '';
+  if (!content) {
+    showToast('请先填写本期进展', true);
+    return;
+  }
+  try {
+    const resp = await apiPost('/project/update', {
+      project_key: project.key,
+      content,
+      author: document.getElementById('pj-userid').value.trim() || 'admin',
+    });
+    if (!resp.success) {
+      showToast('保存失败: ' + (resp.error || '未知错误'), true);
+      return;
+    }
+    showToast('进展已保存');
+    await loadProjectBoard();
+  } catch (e) {
+    showToast('保存失败: ' + e.message, true);
+  }
+}
+
+async function loadProjectBoard() {
+  const listEl = document.getElementById('pj-board-list');
+  const summaryEl = document.getElementById('pj-board-summary');
+  const sourceEl = document.getElementById('pj-board-source');
+  const insightsEl = document.getElementById('pj-board-insights');
+  const updateDueEl = document.getElementById('pj-update-due-list');
+  const actionPanelEl = document.getElementById('pj-action-panel');
+  listEl.innerHTML = '<div class="loading">正在读取桌面项目管理表格...</div>';
+  summaryEl.innerHTML = '';
+  insightsEl.innerHTML = '';
+  updateDueEl.innerHTML = '';
+  actionPanelEl.innerHTML = '';
+  sourceEl.textContent = '';
+
+  try {
+    const resp = await apiGet('/project/board');
+    if (!resp.success) {
+      listEl.innerHTML = '<div class="loading">读取失败: ' + escapeHtml(resp.error || '未知错误') + '</div>';
+      return;
+    }
+    window.projectBoardData = resp;
+    const summary = resp.summary || {};
+    const files = resp.source_files || [];
+    sourceEl.textContent = files.length
+      ? `来源：${files.map(f => f.split('/').pop()).join('，')}`
+      : '未发现桌面项目管理表格';
+    summaryEl.innerHTML = `
+      <div class="stat-card"><div class="label">项目总数</div><div class="value">${summary.total || 0}</div><div class="sub">底层表格识别</div></div>
+      <div class="stat-card"><div class="label">进行中</div><div class="value">${summary.active || 0}</div><div class="sub">active</div></div>
+      <div class="stat-card"><div class="label">待更新</div><div class="value">${summary.update_due || 0}</div><div class="sub">新项目 ${summary.new_update_due || 0} / 双周 ${summary.biweekly_update_due || 0}</div></div>
+      <div class="stat-card"><div class="label">问题项目</div><div class="value">${summary.problem || 0}</div><div class="sub">高风险 ${summary.high_problem || 0}</div></div>
+    `;
+
+    const insights = resp.insights || [];
+    insightsEl.innerHTML = insights.length
+      ? insights.map(item => `<div style="padding:6px 0;color:rgba(224,230,237,0.86);border-bottom:1px solid rgba(99,102,241,0.08);">${escapeHtml(item)}</div>`).join('')
+      : '';
+
+    const projects = resp.projects || [];
+    updateDueEl.innerHTML = renderProjectUpdateDueList(projects);
+    actionPanelEl.innerHTML = renderProjectActionPanel();
+    if (projects.length === 0) {
+      listEl.innerHTML = '<div class="empty">没有读取到项目，请检查桌面“项目管理”文件夹里的表格表头。</div>';
+      return;
+    }
+    listEl.innerHTML = `
+      <table>
+        <thead><tr><th>项目</th><th>负责人</th><th>问题</th><th>风险</th><th>更新</th><th>状态</th><th>进度</th><th>周期</th><th>来源</th><th>操作</th></tr></thead>
+        <tbody>
+          ${projects.map((p, idx) => `
+            <tr>
+              <td>
+                <div style="font-weight:600;color:#e0e6ed;">${escapeHtml(p.name || '-')}</div>
+                <div style="font-size:12px;color:rgba(160,170,200,0.65);max-width:420px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escapeHtml(p.goal || '')}</div>
+              </td>
+              <td>${escapeHtml(p.owner || '-')}</td>
+              <td>${projectProblemBadge(p.problem_status)}</td>
+              <td>${projectRiskBadge(p.risk_level)}</td>
+              <td>${projectUpdateBadge(p.update_status)}</td>
+              <td><span class="badge badge-info">${escapeHtml(p.status || '-')}</span></td>
+              <td>${escapeHtml(p.progress || '-')}</td>
+              <td>${escapeHtml(p.period || '-')}</td>
+              <td>${escapeHtml(p.source || '-')}</td>
+              <td>
+                <button class="btn btn-secondary" onclick="toggleProjectDetail(${idx})">详情</button>
+                <button class="btn btn-secondary" onclick="fillProjectFromBoard(${idx})" style="margin-left:4px;">填入</button>
+              </td>
+            </tr>
+            <tr id="pj-detail-${idx}" style="display:none;">
+              <td colspan="10" style="background:rgba(30,35,55,0.35);">
+                <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;">
+                  <div><div style="font-size:12px;color:#a78bfa;">部门/级别</div><div>${escapeHtml(p.department || '-')} / ${escapeHtml(p.level || '-')}</div></div>
+                  <div><div style="font-size:12px;color:#a78bfa;">项目价值</div><div>${escapeHtml(p.value || '-')}</div></div>
+                  <div><div style="font-size:12px;color:#a78bfa;">风险/问题</div><div>${escapeHtml(p.risks || '-')}</div></div>
+                  <div><div style="font-size:12px;color:#a78bfa;">表格最新进展</div><div>${escapeHtml(p.latest_update || '-')}</div></div>
+                  <div><div style="font-size:12px;color:#a78bfa;">更新规则</div><div>${projectUpdateBadge(p.update_status)} ${escapeHtml((p.update_status && p.update_status.reason) || '')}</div></div>
+                  <div><div style="font-size:12px;color:#a78bfa;">提醒话术</div><div>${escapeHtml((p.update_status && p.update_status.reminder) || '-')}</div></div>
+                </div>
+                <div style="margin-top:12px;">
+                  <div style="font-size:12px;color:#a78bfa;margin-bottom:6px;">问题判断</div>
+                  ${renderProjectProblemStatus(p.problem_status)}
+                </div>
+                <div style="margin-top:12px;">
+                  <div style="font-size:12px;color:#a78bfa;margin-bottom:6px;">人工双周进展</div>
+                  ${renderProjectUpdates(p.updates)}
+                  <textarea id="pj-update-${idx}" rows="2" placeholder="填写本期进展、风险或下步计划..." style="margin-top:8px;"></textarea>
+                  <button class="btn btn-primary" onclick="saveProjectUpdate(${idx})" style="margin-top:8px;">保存进展</button>
+                </div>
+              </td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
+    `;
+  } catch (e) {
+    listEl.innerHTML = '<div class="loading">读取失败: ' + escapeHtml(e.message) + '</div>';
+  }
+}
+
 async function runProjectWBS() {
   const goal = document.getElementById('pj-goal').value.trim();
   const start = document.getElementById('pj-start').value;
@@ -744,13 +1485,13 @@ async function searchHistory() {
     document.getElementById('history-results').innerHTML = results.map(r => {
       const cat = r._category || category || 'unknown';
       const catLabel = categoryLabels[cat] || cat;
-      const ts = r.timestamp || '';
-      const recordId = r.id || '';
+      const ts = escapeHtml(r.timestamp || '');
+      const recordId = escapeHtml(r.id || '');
 
       let rowHtml = '';
       if (cat === 'project') {
         rowHtml = `
-          <div style="font-size:13px;color:#e0e6ed;"><b>${(r.project_goal || '').substring(0, 60)}</b></div>
+          <div style="font-size:13px;color:#e0e6ed;"><b>${escapeHtml((r.project_goal || '').substring(0, 60))}</b></div>
           <div style="font-size:11px;color:rgba(160,170,200,0.6);">
             预警: <span class="badge ${r.alert_level === 'red' ? 'badge-danger' : r.alert_level === 'yellow' ? 'badge-warning' : 'badge-success'}">${(alertEmoji[r.alert_level] || '')} ${r.alert_level}</span>
             &nbsp;|&nbsp; 偏差: ${r.deviation_days ?? '-'}天
@@ -758,9 +1499,31 @@ async function searchHistory() {
             &nbsp;|&nbsp; 进度: ${r.current_progress ?? '-'}%
           </div>
         `;
+      } else if (cat === 'chat') {
+        const files = Array.isArray(r.files) ? r.files : [];
+        const images = Array.isArray(r.images) ? r.images : [];
+        const attachmentHtml = files.length || images.length
+          ? `<div style="font-size:11px;color:rgba(160,170,200,0.55);margin-top:8px;">
+              附件:
+              ${files.map(f => `<a href="${escapeHtml(f.url || '#')}" target="_blank">${escapeHtml(f.name || f.url || '文件')}</a>`).join(' / ')}
+              ${images.map(url => `<a href="${escapeHtml(url)}" target="_blank">${escapeHtml(url)}</a>`).join(' / ')}
+            </div>`
+          : '';
+        rowHtml = `
+          <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px;font-size:11px;color:rgba(160,170,200,0.55);">
+            <span>平台: ${escapeHtml(r.platform || '-')}</span>
+            <span>用户: ${escapeHtml(r.user_name || r.user_id || '-')}</span>
+            <span>会话: ${escapeHtml(r.conversation_id || '-')}</span>
+            <span>功能: ${escapeHtml(r.feature || '-')}</span>
+            <span>状态: ${escapeHtml(r.status || 'ok')}</span>
+          </div>
+          <div style="font-size:12px;color:#e0e6ed;white-space:pre-wrap;word-break:break-word;margin-bottom:8px;"><b>用户：</b>${escapeHtml(r.user_message || '')}</div>
+          <div style="font-size:12px;color:rgba(224,230,237,0.82);white-space:pre-wrap;word-break:break-word;"><b>助手：</b>${escapeHtml(r.assistant_reply || '')}</div>
+          ${attachmentHtml}
+        `;
       } else {
         // 通用记录展示
-        const preview = JSON.stringify(r).substring(0, 200);
+        const preview = escapeHtml(JSON.stringify(r).substring(0, 200));
         rowHtml = `<div style="font-size:12px;color:rgba(160,170,200,0.7);word-break:break-all;">${preview}</div>`;
       }
 
@@ -779,6 +1542,14 @@ async function searchHistory() {
   } catch (e) {
     document.getElementById('history-results').innerHTML = '<div class="loading">搜索失败: ' + e.message + '</div>';
   }
+}
+
+function loadAllChats() {
+  document.getElementById('h-category').value = 'chat';
+  document.getElementById('h-query').value = '';
+  document.getElementById('h-start-date').value = '';
+  document.getElementById('h-end-date').value = '';
+  searchHistory();
 }
 
 async function loadHistoryStats() {
@@ -844,7 +1615,8 @@ async function deleteHistoryRecord(category, recordId) {
 }
 
 // ========== 初始加载 ==========
-loadDashboard();
+const initialPage = (location.hash || '#dashboard').replace('#', '') || 'dashboard';
+showAdminPage(initialPage);
 </script>
 </body>
 </html>

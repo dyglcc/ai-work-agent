@@ -152,7 +152,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-
   <span class="chip" onclick="send('帮我做一个产品介绍PPT')">生成 PPT</span>
   <span class="chip" onclick="send('帮我写一份数据分析报告')">分析报告</span>
   <span class="chip" onclick="send('画一个柱状图：1月100，2月150，3月200')">数据图表</span>
-  <span class="chip" onclick="send('生成一张日落海滩的图片')">AI 生图</span>
+  <span class="chip" onclick="send('帮我作图：生成一张日落海滩的图片')">AI 作图</span>
   <span class="chip" onclick="startMeeting()">会议录制</span>
   <span class="chip" onclick="send('清除记忆')">清除会话</span>
 </div>
@@ -181,7 +181,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-
   <button class="voice-btn" id="voiceBtn" title="按住说话">&#127908;</button>
   <button class="attach-btn" id="attachBtn" title="添加附件/图片" onclick="document.getElementById('fileInput').click()">&#128206;</button>
   <input type="file" id="fileInput" multiple accept="image/*,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.csv" style="display:none" onchange="handleFileSelect(event)">
-  <textarea id="input" placeholder="输入消息... (Enter 发送, Ctrl+V 粘贴图片)" rows="1"></textarea>
+  <textarea id="input" placeholder="输入消息... (Enter 发送，Shift+Enter 换行)" rows="1"></textarea>
   <button class="send-btn" id="sendBtn" onclick="sendFromInput()">发送</button>
 </div>
 
@@ -289,10 +289,23 @@ async function uploadFiles() {
 
 // 消息历史，用于撤回
 let msgPairs = [];
+const liveChatRecords = new Map();
 
 fetch('/health').then(r => r.json()).then(d => {
   modelTag.textContent = d.ai_model || 'unknown';
 }).catch(() => { modelTag.textContent = 'offline'; });
+
+let inputIsComposing = false;
+let compositionEndedAt = 0;
+
+inputEl.addEventListener('compositionstart', () => {
+  inputIsComposing = true;
+});
+
+inputEl.addEventListener('compositionend', () => {
+  inputIsComposing = false;
+  compositionEndedAt = Date.now();
+});
 
 inputEl.addEventListener('input', () => {
   inputEl.style.height = 'auto';
@@ -300,10 +313,13 @@ inputEl.addEventListener('input', () => {
 });
 
 inputEl.addEventListener('keydown', (e) => {
-  if (e.key === 'Enter' && !e.shiftKey) {
-    e.preventDefault();
-    sendFromInput();
-  }
+  if (e.key !== 'Enter') return;
+  if (e.shiftKey) return;
+  if (inputIsComposing || e.isComposing || e.keyCode === 229) return;
+  if (Date.now() - compositionEndedAt < 120) return;
+
+  e.preventDefault();
+  sendFromInput();
 });
 
 function updateRecallButtons() {
@@ -316,22 +332,8 @@ function updateRecallButtons() {
   });
 }
 
-function addMsg(text, role, meta, files, images) {
-  const wrapper = document.createElement('div');
-  wrapper.className = 'msg-wrapper ' + role;
-  wrapper.dataset.text = text;
-
-  const div = document.createElement('div');
-  div.className = 'msg ' + role;
-  div.textContent = text;
-  if (meta) {
-    const m = document.createElement('div');
-    m.className = 'meta';
-    m.textContent = meta;
-    div.appendChild(m);
-  }
-  wrapper.appendChild(div);
-
+function appendMessageAssets(wrapper, files, images) {
+  wrapper.querySelectorAll('.msg-image, .file-download').forEach(el => el.remove());
   if (images && images.length > 0) {
     images.forEach(imgUrl => {
       const img = document.createElement('img');
@@ -353,6 +355,37 @@ function addMsg(text, role, meta, files, images) {
       wrapper.appendChild(link);
     });
   }
+}
+
+function setMsgContent(wrapper, text, meta) {
+  const div = wrapper.querySelector('.msg');
+  div.textContent = text;
+  if (meta) {
+    const m = document.createElement('div');
+    m.className = 'meta';
+    m.textContent = meta;
+    div.appendChild(m);
+  }
+  wrapper.dataset.text = text;
+}
+
+function addMsg(text, role, meta, files, images) {
+  const wrapper = document.createElement('div');
+  wrapper.className = 'msg-wrapper ' + role;
+  wrapper.dataset.text = text;
+
+  const div = document.createElement('div');
+  div.className = 'msg ' + role;
+  div.textContent = text;
+  if (meta) {
+    const m = document.createElement('div');
+    m.className = 'meta';
+    m.textContent = meta;
+    div.appendChild(m);
+  }
+  wrapper.appendChild(div);
+
+  appendMessageAssets(wrapper, files, images);
 
   const actions = document.createElement('div');
   actions.className = 'msg-actions';
@@ -400,7 +433,7 @@ async function recallMessage(userWrapper) {
     const res = await fetch('/recall', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ message: '', user_id: userId }),
+      body: JSON.stringify({ user_id: userId }),
     });
     const data = await res.json();
     if (data.success) {
@@ -493,6 +526,57 @@ async function send(text) {
 function sendFromInput() {
   send(inputEl.value);
 }
+
+function formatLiveMeta(record) {
+  const platform = record.platform || 'external';
+  const feature = record.feature || '处理中';
+  const user = record.user_name || record.user_id || '';
+  return user ? `${platform} · ${user} · ${feature}` : `${platform} · ${feature}`;
+}
+
+function upsertLiveChatRecord(record) {
+  if (!record || record.platform === 'web') return;
+  const id = record.id || record.message_id;
+  if (!id) return;
+
+  const status = record.status || 'ok';
+  const reply = record.assistant_reply || '';
+  const files = record.files || [];
+  const images = record.images || [];
+  const existing = liveChatRecords.get(id);
+
+  if (!existing) {
+    const userEl = addMsg(record.user_message || '', 'user', formatLiveMeta(record));
+    const botText = status === 'processing' && !reply ? '正在处理...' : reply;
+    const botMeta = status === 'processing' ? 'Agent 处理中' : record.feature;
+    const botEl = addMsg(botText, 'bot', botMeta, files, images);
+    liveChatRecords.set(id, { userEl, botEl, status, reply });
+    return;
+  }
+
+  if (existing.status !== status || existing.reply !== reply) {
+    const botText = status === 'processing' && !reply ? '正在处理...' : reply;
+    const botMeta = status === 'processing' ? 'Agent 处理中' : record.feature;
+    setMsgContent(existing.botEl, botText, botMeta);
+    appendMessageAssets(existing.botEl, files, images);
+    chatEl.scrollTop = chatEl.scrollHeight;
+    liveChatRecords.set(id, { ...existing, status, reply });
+  }
+}
+
+async function pollExternalChats() {
+  try {
+    const res = await fetch('/history/search?category=chat&limit=50');
+    const data = await res.json();
+    const records = (data.results || []).slice().reverse();
+    records.forEach(upsertLiveChatRecord);
+  } catch (e) {
+    console.warn('同步外部聊天失败:', e);
+  }
+}
+
+pollExternalChats();
+setInterval(pollExternalChats, 2000);
 
 // ============ 复制 & 多选 ============
 

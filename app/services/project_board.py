@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import csv
+import json
 import re
 from collections import Counter, defaultdict
 from dataclasses import dataclass
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from xml.etree import ElementTree as ET
@@ -15,6 +17,7 @@ from zipfile import ZipFile
 DESKTOP_DIR = Path.home() / "Desktop"
 PROJECT_DIR = DESKTOP_DIR / "项目管理"
 PROJECT_XLSX = DESKTOP_DIR / "项目管理.xlsx"
+PROJECT_UPDATES_JSON = PROJECT_DIR / "project_updates.json"
 
 _XML_NS = {
     "a": "http://schemas.openxmlformats.org/spreadsheetml/2006/main",
@@ -26,6 +29,7 @@ _REL_NS = {"rel": "http://schemas.openxmlformats.org/package/2006/relationships"
 @dataclass
 class ProjectRecord:
     source: str
+    source_mtime: float
     name: str
     owner: str
     status: str
@@ -43,6 +47,7 @@ class ProjectRecord:
 def build_project_board() -> dict[str, Any]:
     """读取桌面项目管理数据并生成看板摘要."""
     files = _discover_files()
+    updates = _load_updates()
     projects: list[ProjectRecord] = []
     errors: list[str] = []
 
@@ -69,6 +74,10 @@ def build_project_board() -> dict[str, Any]:
     not_started = status_counts.get("未开始", 0)
     unknown = status_counts.get("未标注", 0)
 
+    project_dicts = [_project_to_dict(p, updates) for p in projects]
+    update_due_projects = [p for p in project_dicts if p["update_status"]["due"]]
+    problem_projects = [p for p in project_dicts if p["problem_status"]["level"] != "green"]
+
     return {
         "source_dir": str(PROJECT_DIR),
         "source_files": [str(p) for p in files],
@@ -81,15 +90,38 @@ def build_project_board() -> dict[str, Any]:
             "not_started": not_started,
             "unknown": unknown,
             "completion_rate": round(completed / total * 100, 1) if total else 0,
+            "update_due": len(update_due_projects),
+            "new_update_due": sum(1 for p in update_due_projects if p["update_status"]["type"] == "new_project_weekly"),
+            "biweekly_update_due": sum(1 for p in update_due_projects if p["update_status"]["type"] in {"no_update", "biweekly_overdue"}),
+            "problem": len(problem_projects),
+            "high_problem": sum(1 for p in problem_projects if p["problem_status"]["level"] == "red"),
         },
         "status_counts": dict(status_counts),
         "owner_counts": dict(sorted(owner_counts.items(), key=lambda item: item[1], reverse=True)),
         "department_counts": dict(departments),
         "level_counts": dict(levels),
-        "projects": [_project_to_dict(p) for p in projects],
+        "projects": project_dicts,
+        "update_due_projects": update_due_projects,
         "insights": _make_insights(projects, status_counts, owner_counts),
         "errors": errors,
     }
+
+
+def add_project_update(project_key: str, content: str, author: str = "") -> dict[str, str]:
+    """为项目追加一条人工进展记录."""
+    PROJECT_DIR.mkdir(parents=True, exist_ok=True)
+    updates = _load_updates()
+    item = {
+        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "content": content.strip(),
+        "author": author.strip() or "admin",
+    }
+    updates.setdefault(project_key, []).insert(0, item)
+    PROJECT_UPDATES_JSON.write_text(
+        json.dumps(updates, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    return item
 
 
 def _discover_files() -> list[Path]:
@@ -102,6 +134,22 @@ def _discover_files() -> list[Path]:
     if PROJECT_XLSX.exists():
         files.append(PROJECT_XLSX)
     return sorted(dict.fromkeys(files))
+
+
+def _load_updates() -> dict[str, list[dict[str, str]]]:
+    if not PROJECT_UPDATES_JSON.exists():
+        return {}
+    try:
+        data = json.loads(PROJECT_UPDATES_JSON.read_text(encoding="utf-8"))
+        if isinstance(data, dict):
+            return {
+                str(key): [item for item in value if isinstance(item, dict)]
+                for key, value in data.items()
+                if isinstance(value, list)
+            }
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return {}
 
 
 def _read_rows(path: Path) -> list[list[str]]:
@@ -186,6 +234,7 @@ def _rows_to_projects(rows: list[list[str]], source: Path) -> list[ProjectRecord
     headers = [_normalize_header(cell) for cell in rows[header_idx]]
     records: list[ProjectRecord] = []
     last_record: ProjectRecord | None = None
+    source_mtime = source.stat().st_mtime
     for row in rows[header_idx + 1:]:
         if not any(cell.strip() for cell in row):
             continue
@@ -201,6 +250,7 @@ def _rows_to_projects(rows: list[list[str]], source: Path) -> list[ProjectRecord
 
         record = ProjectRecord(
             source=source.name,
+            source_mtime=source_mtime,
             name=_pick(raw, "项目名称", "项目/任务", "项目", "任务") or "未命名项目",
             owner=_pick(raw, "项目负责人", "负责人", "owner") or "未标注",
             status=_infer_status(raw),
@@ -287,8 +337,247 @@ def _split_owners(owner: str) -> list[str]:
     return [part.strip() for part in parts if part.strip() and part.strip() != "未标注"]
 
 
-def _project_to_dict(project: ProjectRecord) -> dict[str, str]:
+def _project_key(project: ProjectRecord) -> str:
+    return f"{project.source}::{project.name}::{project.owner}"
+
+
+def _parse_update_time(value: str) -> datetime | None:
+    try:
+        return datetime.strptime(value, "%Y-%m-%d %H:%M:%S")
+    except (TypeError, ValueError):
+        return None
+
+
+def _week_start(today: date) -> date:
+    return today - timedelta(days=today.weekday())
+
+
+def _update_status(project: ProjectRecord, updates: list[dict[str, str]]) -> dict[str, Any]:
+    if project.status == "已完成":
+        return {
+            "due": False,
+            "type": "completed",
+            "label": "已完成",
+            "reason": "已完成项目不要求更新",
+            "last_update_at": "",
+            "reminder": "",
+            "is_new_project": False,
+        }
+
+    now = datetime.now()
+    this_week_start = _week_start(now.date())
+    source_date = datetime.fromtimestamp(project.source_mtime).date()
+    is_new_project = source_date >= this_week_start
+    parsed_updates = [
+        parsed
+        for parsed in (_parse_update_time(str(item.get("timestamp", ""))) for item in updates)
+        if parsed is not None
+    ]
+    last_update = max(parsed_updates) if parsed_updates else None
+    updated_this_week = bool(last_update and last_update.date() >= this_week_start)
+    owner = project.owner if project.owner and project.owner != "未标注" else "项目负责人"
+
+    if is_new_project and not updated_this_week:
+        reason = "新项目需要在当周完成首次进展更新"
+        return {
+            "due": True,
+            "type": "new_project_weekly",
+            "label": "新项目本周需更新",
+            "reason": reason,
+            "last_update_at": last_update.strftime("%Y-%m-%d %H:%M:%S") if last_update else "",
+            "reminder": f"请{owner}本周补充《{project.name}》的首次进展、下步计划和当前风险。",
+            "is_new_project": True,
+        }
+
+    if not last_update:
+        reason = "已有项目没有人工双周进展记录"
+        return {
+            "due": True,
+            "type": "no_update",
+            "label": "需补双周进展",
+            "reason": reason,
+            "last_update_at": "",
+            "reminder": f"请{owner}补充《{project.name}》本期双周进展、下期计划和风险/阻塞。",
+            "is_new_project": is_new_project,
+        }
+
+    days_since_update = (now - last_update).days
+    if days_since_update >= 14:
+        reason = f"距离上次人工更新已 {days_since_update} 天，超过双周更新周期"
+        return {
+            "due": True,
+            "type": "biweekly_overdue",
+            "label": "双周更新逾期",
+            "reason": reason,
+            "last_update_at": last_update.strftime("%Y-%m-%d %H:%M:%S"),
+            "reminder": f"请{owner}更新《{project.name}》本期双周进展，并说明风险和下阶段计划。",
+            "is_new_project": is_new_project,
+        }
+
     return {
+        "due": False,
+        "type": "up_to_date",
+        "label": "更新正常",
+        "reason": f"最近 {days_since_update} 天内已更新",
+        "last_update_at": last_update.strftime("%Y-%m-%d %H:%M:%S"),
+        "reminder": "",
+        "is_new_project": is_new_project,
+    }
+
+
+def _parse_project_dates(project: ProjectRecord) -> tuple[date | None, date | None]:
+    text = project.period or " ".join(project.raw.values())
+    matches = list(re.finditer(r"(20\d{2})[-/.年](\d{1,2})[-/.月](\d{1,2})", text))
+    dates = [
+        date(int(match.group(1)), int(match.group(2)), int(match.group(3)))
+        for match in matches
+    ]
+    if len(dates) >= 2:
+        return dates[0], dates[1]
+
+    year_match = re.search(r"(20\d{2})年", text)
+    if year_match:
+        year = int(year_match.group(1))
+        month_days = list(re.finditer(r"(\d{1,2})月(\d{1,2})日?", text))
+        dates = [
+            date(year, int(match.group(1)), int(match.group(2)))
+            for match in month_days
+        ]
+        if len(dates) >= 2:
+            return dates[0], dates[1]
+    return None, None
+
+
+def _progress_percent(project: ProjectRecord) -> int | None:
+    text = " ".join([project.progress, project.latest_update, project.status])
+    percent = re.search(r"(\d+(?:\.\d+)?)\s*%", text)
+    if percent:
+        return max(0, min(100, int(float(percent.group(1)))))
+    if project.status == "已完成":
+        return 100
+    if project.status == "未开始":
+        return 0
+    if project.progress == "未填写进展":
+        return None
+    return None
+
+
+def _has_next_action(project: ProjectRecord, updates: list[dict[str, str]]) -> bool:
+    text = " ".join([
+        project.latest_update,
+        project.risks,
+        " ".join(str(item.get("content", "")) for item in updates[:3]),
+    ])
+    if re.search(r"下一步|下步|下阶段|计划|推进|跟进|待办|todo|next|owner|负责人", text, re.I):
+        return True
+    return False
+
+
+def _problem_status(
+    project: ProjectRecord,
+    updates: list[dict[str, str]],
+    update_status: dict[str, Any],
+) -> dict[str, Any]:
+    issues: list[dict[str, str]] = []
+    suggestions: list[str] = []
+    today = datetime.now().date()
+    _, end_date = _parse_project_dates(project)
+    progress = _progress_percent(project)
+
+    if update_status.get("due"):
+        issues.append({
+            "type": "stale_update",
+            "label": "超过更新周期",
+            "detail": str(update_status.get("reason", "")),
+            "severity": "yellow" if update_status.get("type") != "biweekly_overdue" else "red",
+        })
+        suggestions.append("先让负责人补一条本期进展，至少包含进展、风险和下步动作。")
+
+    if end_date and end_date <= today and (progress is None or progress < 90) and project.status != "已完成":
+        progress_text = "未填写" if progress is None else f"{progress}%"
+        issues.append({
+            "type": "deadline_low_progress",
+            "label": "到期但进度低",
+            "detail": f"计划截止 {end_date.isoformat()}，当前进度 {progress_text}",
+            "severity": "red",
+        })
+        suggestions.append("需要确认是否延期、拆分范围，或补充资源推进收尾。")
+
+    if not project.owner or project.owner == "未标注":
+        issues.append({
+            "type": "missing_owner",
+            "label": "负责人不明确",
+            "detail": "表格中没有识别到明确负责人",
+            "severity": "red",
+        })
+        suggestions.append("先指定唯一项目 owner，再补充协作人。")
+
+    dependency_text = " ".join([project.latest_update, project.risks, " ".join(project.raw.values())])
+    if re.search(r"依赖|待确认|待定|阻塞|卡住|协调|资源不足|缺资源|未解决", dependency_text, re.I):
+        issues.append({
+            "type": "open_dependency",
+            "label": "依赖未解决",
+            "detail": "进展或风险中出现依赖/阻塞/协调类信号",
+            "severity": "yellow",
+        })
+        suggestions.append("把依赖方、期望完成时间和需要谁协调写清楚。")
+
+    if not project.goal or project.goal in {"未命名项目", project.name} or len(project.goal) < 8:
+        issues.append({
+            "type": "unclear_goal",
+            "label": "目标不清楚",
+            "detail": "项目目标为空或过短，难以判断业务结果",
+            "severity": "yellow",
+        })
+        suggestions.append("补充可验证目标，例如交付物、指标、截止时间或业务结果。")
+
+    if not _has_next_action(project, updates):
+        issues.append({
+            "type": "missing_next_action",
+            "label": "没有下一步动作",
+            "detail": "最新进展中未识别到下一步计划或明确动作",
+            "severity": "yellow",
+        })
+        suggestions.append("补充下阶段动作、负责人和完成时间。")
+
+    level = "green"
+    if any(issue["severity"] == "red" for issue in issues):
+        level = "red"
+    elif issues:
+        level = "yellow"
+
+    return {
+        "level": level,
+        "label": "有问题" if level == "red" else "需关注" if level == "yellow" else "正常",
+        "issues": issues,
+        "suggestions": list(dict.fromkeys(suggestions)),
+    }
+
+
+def _risk_level(project: ProjectRecord, updates: list[dict[str, str]], problem_status: dict[str, Any]) -> str:
+    if problem_status["level"] == "red":
+        return "red"
+    text = " ".join([
+        project.status,
+        project.progress,
+        project.latest_update,
+        project.risks,
+        " ".join(str(item.get("content", "")) for item in updates),
+    ])
+    if re.search(r"暂停|搁置|冻结|停滞|延期|延迟|卡住|阻塞|风险|高风险|无法|失败|缺资源|资源不足|hold", text, re.I):
+        return "red"
+    if re.search(r"待确认|待定|依赖|推进中|协调|关注|缺少|未填写|未明确|问题", text, re.I):
+        return "yellow"
+    return "green"
+
+
+def _project_to_dict(project: ProjectRecord, updates: dict[str, list[dict[str, str]]]) -> dict[str, Any]:
+    key = _project_key(project)
+    project_updates = updates.get(key, [])
+    update_status = _update_status(project, project_updates)
+    problem_status = _problem_status(project, project_updates, update_status)
+    return {
+        "key": key,
         "source": project.source,
         "name": project.name,
         "owner": project.owner,
@@ -301,6 +590,10 @@ def _project_to_dict(project: ProjectRecord) -> dict[str, str]:
         "latest_update": _shorten(project.latest_update, 180),
         "risks": _shorten(project.risks, 180),
         "value": _shorten(project.value, 140),
+        "updates": project_updates,
+        "risk_level": _risk_level(project, project_updates, problem_status),
+        "update_status": update_status,
+        "problem_status": problem_status,
     }
 
 

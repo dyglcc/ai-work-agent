@@ -67,7 +67,18 @@ def save_record(category: str, record: dict, max_records: int = 200) -> None:
     if "id" not in record:
         record["id"] = f"{int(time.time() * 1000)}_{len(records)}"
     
-    records.append(record)
+    existing_idx = None
+    record_id = record.get("id")
+    if record_id:
+        for idx, existing in enumerate(records):
+            if existing.get("id") == record_id:
+                existing_idx = idx
+                break
+
+    if existing_idx is None:
+        records.append(record)
+    else:
+        records[existing_idx] = {**records[existing_idx], **record}
     
     # 限制最大记录数
     if len(records) > max_records:

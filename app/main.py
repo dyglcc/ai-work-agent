@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import csv
+import io
 import json
 import logging
 import os
@@ -177,7 +179,7 @@ def _is_ppt_payload(data: dict) -> bool:
 
 async def _materialize_generated_files(reply_text: str) -> tuple[str, list[dict], list[str]]:
     """Convert feature JSON markers into generated files usable by Web and platform adapters."""
-    from app.services.file_gen import generate_pptx, generate_docx, generate_chart
+    from app.services.file_gen import generate_pptx, generate_docx, generate_chart, generate_image
 
     files: list[dict] = []
     images: list[str] = []
@@ -220,6 +222,23 @@ async def _materialize_generated_files(reply_text: str) -> tuple[str, list[dict]
         images.append(_file_url(file_id))
         return data.get("summary", f"已生成图表：{data['title']}"), files, images
 
+    if reply_text.startswith("__IMAGE_JSON__\n"):
+        data = _extract_json(reply_text.split("__IMAGE_JSON__\n", 1)[1])
+        if data is None:
+            raise ValueError("无法解析 AI 返回的图片 JSON 数据")
+        image_content = await generate_image(
+            data["prompt"],
+            title=data.get("title", "AI 作图"),
+            subtitle=data.get("subtitle", ""),
+            body=data.get("body", ""),
+            style=data.get("style", ""),
+            palette=data.get("palette", "blue"),
+            elements=data.get("elements", []),
+        )
+        file_id = _save_file(image_content, "png")
+        images.append(_file_url(file_id))
+        return data.get("summary", "已生成图片"), files, images
+
     return reply_text, files, images
 
 
@@ -238,6 +257,70 @@ def _append_platform_attachments(reply_text: str, files: list[dict], images: lis
     return "\n".join(parts)
 
 
+def _match_feature_name(content: str) -> str:
+    from app.core.router import _CLEAR_KEYWORDS
+
+    stripped = content.strip()
+    if stripped in _CLEAR_KEYWORDS:
+        return "系统"
+    for feature in cmd_router.features:
+        if feature.matches(stripped):
+            return feature.name
+    return cmd_router.fallback.name
+
+
+def _save_chat_history(
+    *,
+    platform: str,
+    message_id: str,
+    user_id: str,
+    user_name: str,
+    user_message: str,
+    assistant_reply: str,
+    feature: str,
+    is_group: bool = False,
+    group_id: str = "",
+    files: list[dict] | None = None,
+    images: list[str] | None = None,
+    status: str = "ok",
+    record_id: str = "",
+) -> None:
+    """Persist one completed chat turn for admin review."""
+    from app.services.history_store import save_record
+
+    conversation_id = group_id if is_group and group_id else user_id
+    record = {
+        "platform": platform,
+        "message_id": message_id,
+        "conversation_id": conversation_id,
+        "user_id": user_id,
+        "user_name": user_name,
+        "is_group": is_group,
+        "group_id": group_id,
+        "feature": feature,
+        "user_message": user_message,
+        "assistant_reply": assistant_reply,
+        "files": files or [],
+        "images": images or [],
+        "status": status,
+    }
+    if record_id:
+        record["id"] = record_id
+
+    try:
+        save_record(
+            "chat",
+            record,
+            max_records=2000,
+        )
+    except Exception:
+        logger.exception("保存聊天历史失败")
+
+
+def _chat_history_id(platform: str, message_id: str) -> str:
+    return f"{platform}:{message_id}" if message_id else f"{platform}:{uuid.uuid4().hex}"
+
+
 async def handle_message(message: UnifiedMessage) -> None:
     """统一消息处理入口：去重 → 路由 → 回复."""
     if await _is_duplicate(message.message_id):
@@ -251,6 +334,24 @@ async def handle_message(message: UnifiedMessage) -> None:
         message.content[:50],
     )
 
+    files: list[dict] = []
+    images: list[str] = []
+    feature_name = _match_feature_name(message.content)
+    status = "ok"
+    history_id = _chat_history_id(message.platform.value, message.message_id)
+    _save_chat_history(
+        platform=message.platform.value,
+        message_id=message.message_id,
+        user_id=message.user_id,
+        user_name=message.user_name,
+        user_message=message.content,
+        assistant_reply="",
+        feature=feature_name,
+        is_group=message.is_group,
+        group_id=message.group_id,
+        status="processing",
+        record_id=history_id,
+    )
     try:
         reply_text = await cmd_router.route(message)
         reply_text, files, images = await _materialize_generated_files(reply_text)
@@ -260,6 +361,26 @@ async def handle_message(message: UnifiedMessage) -> None:
     except Exception:
         logger.exception("处理消息时出错")
         reply_text = "抱歉，处理您的消息时出现了错误，请稍后重试。"
+        status = "error"
+
+    try:
+        _save_chat_history(
+            platform=message.platform.value,
+            message_id=message.message_id,
+            user_id=message.user_id,
+            user_name=message.user_name,
+            user_message=message.content,
+            assistant_reply=reply_text,
+            feature=feature_name,
+            is_group=message.is_group,
+            group_id=message.group_id,
+            files=files,
+            images=images,
+            status=status,
+            record_id=history_id,
+        )
+    except Exception:
+        logger.exception("保存聊天历史失败")
 
     reply = ReplyMessage(
         content=reply_text,
@@ -429,6 +550,10 @@ class ChatRequest(BaseModel):
     user_id: str = Field(default="", description="用户ID，用于多轮对话记忆")
 
 
+class RecallRequest(BaseModel):
+    user_id: str = Field(default="", description="用户ID，用于撤回上一轮对话")
+
+
 class FileInfo(BaseModel):
     name: str
     url: str
@@ -467,7 +592,17 @@ async def chat(req: ChatRequest):
     from app.core.router import _CLEAR_KEYWORDS
     if content in _CLEAR_KEYWORDS:
         ai_engine.memory.clear(user_id)
-        return ChatResponse(reply="会话已清空，我们可以重新开始对话了。", user_id=user_id, feature="系统")
+        reply_text = "会话已清空，我们可以重新开始对话了。"
+        _save_chat_history(
+            platform="web",
+            message_id=message.message_id,
+            user_id=user_id,
+            user_name=user_id,
+            user_message=req.message,
+            assistant_reply=reply_text,
+            feature="系统",
+        )
+        return ChatResponse(reply=reply_text, user_id=user_id, feature="系统")
 
     for feature in cmd_router.features:
         if feature.matches(content):
@@ -537,7 +672,15 @@ async def chat(req: ChatRequest):
             data = json.loads(json_str)
 
             # 调用图片生成 API
-            image_content = await generate_image(data["prompt"])
+            image_content = await generate_image(
+                data["prompt"],
+                title=data.get("title", "AI 作图"),
+                subtitle=data.get("subtitle", ""),
+                body=data.get("body", ""),
+                style=data.get("style", ""),
+                palette=data.get("palette", "blue"),
+                elements=data.get("elements", []),
+            )
             file_id = _save_file(image_content, "png")
 
             images.append(f"/files/{file_id}")
@@ -608,6 +751,19 @@ async def chat(req: ChatRequest):
         logger.exception("处理文件生成时出错")
         reply_text += f"\n\n（文件生成失败：{str(e)}）"
 
+    response_files = [file.model_dump() for file in files]
+    _save_chat_history(
+        platform="web",
+        message_id=message.message_id,
+        user_id=user_id,
+        user_name=user_id,
+        user_message=req.message,
+        assistant_reply=reply_text,
+        feature=feature_name,
+        files=response_files,
+        images=images,
+    )
+
     return ChatResponse(
         reply=reply_text,
         user_id=user_id,
@@ -618,7 +774,7 @@ async def chat(req: ChatRequest):
 
 
 @app.post("/recall")
-async def recall_message(req: ChatRequest):
+async def recall_message(req: RecallRequest):
     """撤回上一轮对话"""
     user_id = req.user_id or f"web_{uuid.uuid4().hex[:8]}"
 
@@ -1351,6 +1507,12 @@ class ProjectWBSRequest(BaseModel):
     user_id: str = Field(default="", description="用户ID")
 
 
+class ProjectUpdateRequest(BaseModel):
+    project_key: str = Field(..., min_length=1, description="项目唯一标识")
+    content: str = Field(..., min_length=1, description="本期进展内容")
+    author: str = Field(default="", description="记录人")
+
+
 @app.post("/project/wbs")
 async def project_wbs(req: ProjectWBSRequest):
     """项目管理：WBS 拆解与排期偏差预警"""
@@ -1389,8 +1551,135 @@ async def project_wbs(req: ProjectWBSRequest):
     return {
         "success": True,
         "summary": reply_text,
-        "history": feature.get_history()[-1] if feature.history else None,
+        "history": feature.get_history()[0] if feature.get_history() else None,
     }
+
+
+@app.get("/project/board")
+async def project_board():
+    """读取桌面项目管理底层表格，返回项目看板数据"""
+    from app.services.project_board import build_project_board
+
+    try:
+        board = build_project_board()
+        return {"success": True, **board}
+    except Exception as exc:
+        logger.exception("读取项目管理底层表格失败")
+        return {"success": False, "error": str(exc)}
+
+
+@app.post("/project/update")
+async def project_update(req: ProjectUpdateRequest):
+    """为项目追加一条双周进展/人工更新记录"""
+    from app.services.project_board import add_project_update, build_project_board
+
+    try:
+        update = add_project_update(req.project_key, req.content, req.author)
+        board = build_project_board()
+        return {"success": True, "update": update, "summary": board.get("summary", {})}
+    except Exception as exc:
+        logger.exception("保存项目进展失败")
+        return {"success": False, "error": str(exc)}
+
+
+@app.post("/project/import")
+async def project_import(file: UploadFile = File(...)):
+    """导入项目管理底层表格到桌面“项目管理”文件夹"""
+    allowed_suffixes = {".xlsx", ".csv", ".tsv"}
+    original_name = pathlib.Path(file.filename or "").name
+    suffix = pathlib.Path(original_name).suffix.lower()
+    if suffix not in allowed_suffixes:
+        return {"success": False, "error": "仅支持 .xlsx、.csv、.tsv 表格文件"}
+
+    project_dir = pathlib.Path.home() / "Desktop" / "项目管理"
+    project_dir.mkdir(parents=True, exist_ok=True)
+
+    stem = pathlib.Path(original_name).stem or "项目管理导入"
+    safe_stem = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", stem).strip(" .") or "项目管理导入"
+    target = project_dir / f"{safe_stem}{suffix}"
+    if target.exists():
+        target = project_dir / f"{safe_stem}-{uuid.uuid4().hex[:8]}{suffix}"
+
+    content = await file.read()
+    if not content:
+        return {"success": False, "error": "导入文件为空"}
+    target.write_bytes(content)
+
+    from app.services.project_board import build_project_board
+
+    board = build_project_board()
+    return {
+        "success": True,
+        "filename": target.name,
+        "path": str(target),
+        "summary": board.get("summary", {}),
+    }
+
+
+@app.get("/project/export")
+async def project_export():
+    """导出当前项目管理看板为 CSV 表格"""
+    from app.services.project_board import build_project_board
+
+    board = build_project_board()
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow([
+        "项目名称",
+        "负责人",
+        "问题等级",
+        "问题原因",
+        "推进建议",
+        "风险等级",
+        "状态",
+        "进度",
+        "级别",
+        "部门",
+        "计划周期",
+        "项目目标",
+        "最新进展",
+        "风险/问题",
+        "项目价值",
+        "人工进展",
+        "来源文件",
+    ])
+    for project in board.get("projects", []):
+        updates = " / ".join(
+            f"{item.get('timestamp', '')} {item.get('author', '')}: {item.get('content', '')}"
+            for item in project.get("updates", [])
+        )
+        problem_status = project.get("problem_status", {}) or {}
+        problem_reasons = " / ".join(
+            f"{item.get('label', '')}: {item.get('detail', '')}"
+            for item in problem_status.get("issues", [])
+        )
+        problem_suggestions = " / ".join(problem_status.get("suggestions", []))
+        writer.writerow([
+            project.get("name", ""),
+            project.get("owner", ""),
+            problem_status.get("label", ""),
+            problem_reasons,
+            problem_suggestions,
+            project.get("risk_level", ""),
+            project.get("status", ""),
+            project.get("progress", ""),
+            project.get("level", ""),
+            project.get("department", ""),
+            project.get("period", ""),
+            project.get("goal", ""),
+            project.get("latest_update", ""),
+            project.get("risks", ""),
+            project.get("value", ""),
+            updates,
+            project.get("source", ""),
+        ])
+
+    content = "\ufeff" + output.getvalue()
+    return Response(
+        content=content,
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": 'attachment; filename="project-board.csv"'},
+    )
 
 
 @app.get("/project/history")
@@ -1483,7 +1772,10 @@ async def delete_history_record(category: str, record_id: str):
 async def admin_page():
     """返回管理后台页面"""
     html_path = pathlib.Path(__file__).parent.parent / "static" / "admin.html"
-    return HTMLResponse(html_path.read_text(encoding="utf-8"))
+    return HTMLResponse(
+        html_path.read_text(encoding="utf-8"),
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -1491,4 +1783,7 @@ async def index():
     """返回 Web 聊天页面."""
     import pathlib
     html_path = pathlib.Path(__file__).parent.parent / "static" / "index.html"
-    return HTMLResponse(html_path.read_text(encoding="utf-8"))
+    return HTMLResponse(
+        html_path.read_text(encoding="utf-8"),
+        headers={"Cache-Control": "no-store"},
+    )

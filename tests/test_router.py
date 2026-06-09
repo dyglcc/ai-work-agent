@@ -134,6 +134,22 @@ class TestCommandRouter:
                 break
         assert matched
 
+    def test_route_image_generation(self):
+        """作图/海报关键词应路由到图片生成功能"""
+        msg = UnifiedMessage(
+            platform=Platform.DINGTALK,
+            message_id="test1",
+            user_id="user1",
+            user_name="test",
+            content="帮我作图，做一张家族群海报",
+        )
+        matched_name = ""
+        for feature in self.router.features:
+            if feature.matches(msg.content):
+                matched_name = feature.name
+                break
+        assert matched_name == "AI作图"
+
     def test_route_reminder(self):
         """提醒关键词应路由到提醒功能"""
         msg = UnifiedMessage(
