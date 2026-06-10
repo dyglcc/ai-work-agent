@@ -13,6 +13,7 @@ from typing import Any
 from app.config import settings
 from app.core.ai_engine import AIEngine
 from app.core.message import UnifiedMessage
+from app.core.tools import format_search_results, tool_registry
 from app.features.base import Feature
 
 logger = logging.getLogger(__name__)
@@ -73,6 +74,9 @@ class InstalledSkillFeature(Feature):
         prompt = self.skill.instructions.strip()
         if not prompt:
             prompt = f"你是 Skill：{self.skill.name}。{self.skill.description}"
+        tool_context = await _build_tool_context(self.skill, message)
+        if tool_context:
+            prompt = f"{prompt}\n\n## 可用工具结果\n{tool_context}"
         return await self.ai.chat(message.content, prompt, user_id=message.user_id)
 
 
@@ -323,7 +327,23 @@ async def _execute_handler(skill: SkillDefinition, message: UnifiedMessage, ai_e
     handler = getattr(module, "handle", None)
     if handler is None:
         raise ValueError(f"Skill 入口缺少 handle 函数: {skill.entry}")
-    result = handler(message, {"skill": skill.to_dict(), "ai": ai_engine})
+    result = handler(message, {
+        "skill": skill.to_dict(),
+        "ai": ai_engine,
+        "tools": tool_registry.as_dict(),
+    })
     if hasattr(result, "__await__"):
         result = await result
     return str(result)
+
+
+async def _build_tool_context(skill: SkillDefinition, message: UnifiedMessage) -> str:
+    instructions = skill.instructions.lower()
+    if "web_search" not in instructions and "web search" not in instructions and "搜索" not in skill.description:
+        return ""
+    try:
+        results = await tool_registry.call("web_search", message.content, max_results=5)
+    except Exception as exc:
+        logger.warning("Skill %s 调用 web_search 失败: %s", skill.id, exc)
+        return f"web_search 调用失败：{exc}"
+    return "web_search 结果：\n" + format_search_results(results)

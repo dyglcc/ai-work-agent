@@ -42,3 +42,17 @@ async def handle(message, context):
     ai = context["ai"]
     return await ai.chat(message.content, "你是一个专业助手", user_id=message.user_id)
 ```
+
+代码型 Skill 可以使用项目内置工具：
+
+```python
+async def handle(message, context):
+    web_search = context["tools"]["web_search"]
+    results = await web_search("USD to CNY exchange rate", max_results=3)
+    return str(results)
+```
+
+当前内置工具：
+
+- `web_search(query, max_results=5)`：搜索网页，返回标题、链接、摘要。
+- `web_fetch(url, max_chars=4000)`：抓取网页正文。

@@ -142,6 +142,22 @@ skills/
 
 没有 `handler.py` 时，系统会把 `SKILL.md` 当作 system prompt 调用当前 LLM；有 `handler.py` 时，会执行其中的 `handle(message, context)`。
 
+代码型 Skill 可通过 `context["tools"]` 使用项目内置工具：
+
+```python
+async def handle(message, context):
+    results = await context["tools"]["web_search"]("USD to CNY exchange rate")
+    return str(results)
+```
+
+当前支持 `web_search` 和 `web_fetch`。也可以通过 API 调试：
+
+```bash
+curl -X POST http://localhost:8000/tools/web_search \
+  -H "Content-Type: application/json" \
+  -d '{"query":"USD to CNY exchange rate","max_results":3}'
+```
+
 ## Docker
 
 ```bash

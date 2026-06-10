@@ -32,6 +32,7 @@ from app.core.skill_loader import (
     set_skill_enabled,
     skills_root,
 )
+from app.core.tools import web_fetch, web_search
 from app.core.workflow import (
     FeatureAgent,
     WorkflowDefinition,
@@ -1385,6 +1386,16 @@ class SkillToggleRequest(BaseModel):
     enabled: bool
 
 
+class WebSearchRequest(BaseModel):
+    query: str = Field(..., description="搜索关键词")
+    max_results: int = Field(default=5, ge=1, le=10, description="结果数量")
+
+
+class WebFetchRequest(BaseModel):
+    url: str = Field(..., description="要抓取的 URL")
+    max_chars: int = Field(default=4000, ge=200, le=20000, description="最大返回字符数")
+
+
 @app.post("/admin/features/toggle")
 async def admin_toggle_feature(req: FeatureToggleRequest):
     """切换功能开关"""
@@ -1490,6 +1501,28 @@ async def skills_execute(req: SkillExecuteRequest):
         return {"success": True, "skill_id": req.skill_id, "reply": result}
     except Exception as exc:
         logger.exception("执行 Skill 失败")
+        return {"success": False, "error": str(exc)}
+
+
+@app.post("/tools/web_search")
+async def tools_web_search(req: WebSearchRequest):
+    """执行项目内置 Web 搜索工具."""
+    try:
+        results = await web_search(req.query, max_results=req.max_results)
+        return {"success": True, "query": req.query, "results": results}
+    except Exception as exc:
+        logger.exception("Web 搜索失败")
+        return {"success": False, "error": str(exc)}
+
+
+@app.post("/tools/web_fetch")
+async def tools_web_fetch(req: WebFetchRequest):
+    """抓取网页正文."""
+    try:
+        text = await web_fetch(req.url, max_chars=req.max_chars)
+        return {"success": True, "url": req.url, "text": text}
+    except Exception as exc:
+        logger.exception("Web 抓取失败")
         return {"success": False, "error": str(exc)}
 
 

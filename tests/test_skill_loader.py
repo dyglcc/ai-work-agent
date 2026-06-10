@@ -103,6 +103,47 @@ async def test_handler_skill_executes_python_handler(tmp_path, monkeypatch):
     assert reply == "handled:hello:handler_skill"
 
 
+@pytest.mark.asyncio
+async def test_handler_skill_receives_tools(tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "skills_dir", str(tmp_path))
+    skill_dir = tmp_path / "tool_skill"
+    skill_dir.mkdir()
+    (skill_dir / "skill.json").write_text(
+        json.dumps({
+            "id": "tool_skill",
+            "name": "Tool Skill",
+            "keywords": ["tool"],
+            "entry": "handler.py",
+        }),
+        encoding="utf-8",
+    )
+    (skill_dir / "handler.py").write_text(
+        """async def handle(message, context):
+    results = await context["tools"]["web_search"]("example")
+    return results[0]["title"]
+""",
+        encoding="utf-8",
+    )
+    message = UnifiedMessage(
+        platform=Platform.DINGTALK,
+        message_id="m1",
+        user_id="u1",
+        user_name="u1",
+        content="hello",
+    )
+
+    from app.core import skill_loader
+
+    async def fake_search(query, max_results=5):
+        return [{"title": "tool-ok", "url": "https://example.com", "snippet": query}]
+
+    monkeypatch.setitem(skill_loader.tool_registry._tools, "web_search", fake_search)
+
+    reply = await execute_skill("tool_skill", message, DummyAI())
+
+    assert reply == "tool-ok"
+
+
 def test_toggle_skill_writes_manifest(tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "skills_dir", str(tmp_path))
     skill_dir = tmp_path / "toggle"
