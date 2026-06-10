@@ -1,4 +1,8 @@
 import json
+import threading
+from functools import partial
+from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
+from zipfile import ZipFile
 
 import pytest
 
@@ -7,6 +11,7 @@ from app.core.message import Platform, UnifiedMessage
 from app.core.skill_loader import (
     InstalledSkillFeature,
     execute_skill,
+    install_skill_from_url,
     load_installed_skills,
     set_skill_enabled,
 )
@@ -201,3 +206,32 @@ description: Convert a US dollar amount into Chinese yuan (RMB). Make sure to us
     assert "美元" in skill.keywords
     assert "人民币" in skill.keywords
     assert feature.matches("算一下 250")
+
+
+@pytest.mark.asyncio
+async def test_install_skill_from_url(tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "skills_dir", str(tmp_path / "skills"))
+    zip_dir = tmp_path / "zips"
+    zip_dir.mkdir()
+    zip_path = zip_dir / "url-skill.zip"
+    with ZipFile(zip_path, "w") as zf:
+        zf.writestr("url-skill/skill.json", json.dumps({
+            "id": "url_skill",
+            "name": "URL Skill",
+            "keywords": ["url skill"],
+        }))
+        zf.writestr("url-skill/SKILL.md", "URL skill body")
+
+    handler = partial(SimpleHTTPRequestHandler, directory=str(zip_dir))
+    server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        port = server.server_address[1]
+        skill = await install_skill_from_url(f"http://127.0.0.1:{port}/url-skill.zip")
+    finally:
+        server.shutdown()
+        server.server_close()
+
+    assert skill.id == "url_skill"
+    assert (tmp_path / "skills" / "url-skill" / "SKILL.md").exists()

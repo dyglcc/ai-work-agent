@@ -27,6 +27,7 @@ from app.core.message import Platform, ReplyMessage, UnifiedMessage
 from app.core.router import CommandRouter
 from app.core.skill_loader import (
     execute_skill,
+    install_skill_from_url,
     install_skill_zip,
     load_installed_skills,
     set_skill_enabled,
@@ -1386,6 +1387,10 @@ class SkillToggleRequest(BaseModel):
     enabled: bool
 
 
+class SkillInstallUrlRequest(BaseModel):
+    url: str = Field(..., description="Skill ZIP 下载地址")
+
+
 class WebSearchRequest(BaseModel):
     query: str = Field(..., description="搜索关键词")
     max_results: int = Field(default=5, ge=1, le=10, description="结果数量")
@@ -1483,6 +1488,20 @@ async def admin_skills_install(file: UploadFile = File(...)):
         return {"success": False, "error": str(exc)}
     finally:
         temp_path.unlink(missing_ok=True)
+
+
+@app.post("/admin/skills/install_url")
+async def admin_skills_install_url(req: SkillInstallUrlRequest):
+    """从网络 URL 下载 zip 并安装 Skill."""
+    try:
+        skill = await install_skill_from_url(req.url)
+        cmd_router.reload_skills()
+        global workflow_engine
+        workflow_engine = _setup_workflow_engine()
+        return {"success": True, "skill": skill.to_dict()}
+    except Exception as exc:
+        logger.exception("从 URL 安装 Skill 失败")
+        return {"success": False, "error": str(exc)}
 
 
 @app.post("/skills/execute")

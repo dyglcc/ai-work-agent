@@ -56,3 +56,8 @@ async def handle(message, context):
 
 - `web_search(query, max_results=5)`：搜索网页，返回标题、链接、摘要。
 - `web_fetch(url, max_chars=4000)`：抓取网页正文。
+
+后台支持两种安装方式：
+
+- 上传本地 Skill ZIP。
+- 输入网络 `.zip` URL 安装。

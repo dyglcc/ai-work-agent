@@ -158,6 +158,16 @@ curl -X POST http://localhost:8000/tools/web_search \
   -d '{"query":"USD to CNY exchange rate","max_results":3}'
 ```
 
+也可以从网络 URL 安装 Skill ZIP：
+
+```bash
+curl -X POST http://localhost:8000/admin/skills/install_url \
+  -H "Content-Type: application/json" \
+  -d '{"url":"https://example.com/my-skill.zip"}'
+```
+
+为了安全，URL 安装当前只支持 `http/https` 的 `.zip` 文件，并限制单个包大小。
+
 ## Docker
 
 ```bash

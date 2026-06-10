@@ -5,10 +5,14 @@ import json
 import logging
 import re
 import shutil
+import tempfile
 import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+from urllib.parse import unquote, urlparse
+
+import httpx
 
 from app.config import settings
 from app.core.ai_engine import AIEngine
@@ -17,6 +21,8 @@ from app.core.tools import format_search_results, tool_registry
 from app.features.base import Feature
 
 logger = logging.getLogger(__name__)
+
+MAX_SKILL_ZIP_BYTES = 25 * 1024 * 1024
 
 
 @dataclass
@@ -153,6 +159,41 @@ def install_skill_zip(zip_path: Path) -> SkillDefinition:
         shutil.rmtree(target, ignore_errors=True)
         raise ValueError("压缩包中未找到 skill.json 或 SKILL.md")
     return skill
+
+
+async def install_skill_from_url(url: str, max_bytes: int = MAX_SKILL_ZIP_BYTES) -> SkillDefinition:
+    """从网络 URL 下载 zip 并安装 Skill."""
+    parsed = urlparse(url.strip())
+    if parsed.scheme not in {"http", "https"}:
+        raise ValueError("仅支持 http/https URL")
+    filename = Path(unquote(parsed.path)).name.lower()
+    if not filename.endswith(".zip"):
+        raise ValueError("仅支持 .zip Skill 包 URL")
+
+    temp_path = Path(tempfile.gettempdir()) / f"skill-url-{_safe_id(Path(filename).stem)}.zip"
+    total = 0
+    try:
+        use_env_proxy = parsed.hostname not in {"127.0.0.1", "localhost", "::1"}
+        async with httpx.AsyncClient(timeout=30, follow_redirects=True, trust_env=use_env_proxy) as client:
+            async with client.stream("GET", url) as response:
+                response.raise_for_status()
+                content_type = response.headers.get("content-type", "")
+                content_length = response.headers.get("content-length")
+                if content_length and int(content_length) > max_bytes:
+                    raise ValueError(f"Skill 包超过大小限制: {max_bytes // 1024 // 1024}MB")
+                if "zip" not in content_type.lower() and not filename.endswith(".zip"):
+                    raise ValueError("URL 响应不是 zip 文件")
+                with temp_path.open("wb") as f:
+                    async for chunk in response.aiter_bytes():
+                        total += len(chunk)
+                        if total > max_bytes:
+                            raise ValueError(f"Skill 包超过大小限制: {max_bytes // 1024 // 1024}MB")
+                        f.write(chunk)
+        if total == 0:
+            raise ValueError("下载到的 Skill 包为空")
+        return install_skill_zip(temp_path)
+    finally:
+        temp_path.unlink(missing_ok=True)
 
 
 def set_skill_enabled(skill_id: str, enabled: bool) -> SkillDefinition:
