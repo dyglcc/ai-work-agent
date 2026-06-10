@@ -1,0 +1,7 @@
+﻿interface:
+  display_name: "Cny Converter"
+  short_description: "Migrated from local Claude skills."
+  default_prompt: "Use $cny-converter to help with this task."
+
+policy:
+  allow_implicit_invocation: true
