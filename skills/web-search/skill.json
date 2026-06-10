@@ -1,0 +1,8 @@
+{
+  "id": "web-search",
+  "name": "网页搜索 Skill",
+  "description": "使用项目内置 web_search 工具搜索实时网页信息，并返回标题、摘要和链接。",
+  "keywords": ["搜一下", "搜索", "查一下", "查找", "最新新闻", "新闻", "web_search"],
+  "entry": "handler.py",
+  "enabled": true
+}
